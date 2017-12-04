@@ -36,11 +36,11 @@ def get_args():
 
 if __name__ == "__main__":
     args = get_args()
+    # import ipdb; ipdb.set_trace()
     p1, true_labels = load_split(args.split_file, args.rgb_feat, args.n_classes)
     p2 = np.load(args.depth_feat)
-    p2 = p2[:,:49]
+    # p2 = p2[:,:49]
     print(true_labels)
-    # import ipdb; ipdb.set_trace()
     score1 = np.sum(true_labels == np.argmax(p1, axis=1)) / float(true_labels.size)
     score2 = np.sum(true_labels == np.argmax(p2, axis=1)) / float(true_labels.size)
     print("RGB: %.2f; Depth: %.2f\n" % (score1*100, score2*100))

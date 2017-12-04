@@ -1,0 +1,1 @@
+python merge_pointnet.py data/washington_deco_s9_depth.pkl data/pcl_np_not_freezed_split9 data/depth_test_split_9.txt data/depth_test_split_9.txt 51
