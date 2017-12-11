@@ -1,0 +1,1 @@
+/home/iodice/.virtualenvs/pytorch/bin/python /home/iodice/vandal-deco/progetto-alessandro/generate_confusion.py --nepoch 120 --solver Nesterov --lr 0.01 --lr_gamma 0.1 --test_epochs 5 --dset split5 --k 0 --gpu -1 --model epoch119DECO_medium_convNesterovfreezed.pkl
