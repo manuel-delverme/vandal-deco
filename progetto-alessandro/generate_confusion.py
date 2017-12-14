@@ -9,7 +9,7 @@ import torch.nn.parallel
 import torch.utils.data
 import torchvision as vision
 import h5py
-from DECO_gpu_fix02 import *
+from main import *
 import torch.utils.data as data
 from PIL import Image
 from PIL import ImageChops

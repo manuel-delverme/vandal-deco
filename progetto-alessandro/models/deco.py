@@ -1,229 +1,12 @@
 from __future__ import print_function
-import argparse
-import os
-import random
-import torch
+import pointnet
 import torch.nn as nn
-import torch.nn.parallel
-import torch.backends.cudnn as cudnn
-import torch.optim as optim
-import torch.utils.data
-import torchvision.transforms as transforms
-import torchvision.utils as vutils
-from torch.autograd import Variable
-from PIL import Image
 import numpy as np
-import matplotlib.pyplot as plt
-import pdb
+import torch.nn.parallel
+import torch.utils.data
+from torch.autograd import Variable
+import torch
 import torch.nn.functional as F
-from torch.nn.modules.module import _addindent
-import code
-from senet import SeResNet, PreActBottleneck, PreActBlock, conv3x3
-
-
-def get_output_shape(model, module):
-    if not module._modules.keys:
-        last_layer_name = module._modules.keys()[-1]
-        last_layer = module._modules.get(last_layer_name)
-        h = last_layer.register_forward_hook(
-            lambda m, i, o: print(
-                'm:', type(m),
-                '\ni:', type(i),
-                '\n   len:', len(i),
-                '\n   type:', type(i[0]),
-                '\n   data size:', i[0].data.size(),
-                '\n   data type:', i[0].data.type(),
-                '\no:', type(o),
-                '\n   data size:', o.data.size(),
-                '\n   data type:', o.data.type(),
-            )
-        )
-        # h.remove()
-        x = Variable(torch.randn(1, 1, 224, 224)).cuda()
-        h_x = model(x)
-
-
-# code.interact(local=locals())
-
-def torch_summarize(model, show_weights=True, show_parameters=True):
-    """Summarizes torch model by showing trainable parameters and weights."""
-    tmpstr = model.__class__.__name__ + ' (\n'
-    total_params = 0
-    for key, module in model._modules.items():
-        # if it contains layers let call it recursively to get params and weights
-        if type(module) in [
-            torch.nn.modules.container.Container,
-            torch.nn.modules.container.Sequential
-        ]:
-            modstr = torch_summarize(module)
-        else:
-            modstr = module.__repr__()
-        modstr = _addindent(modstr, 2)
-
-        params = sum([np.prod(p.size()) for p in module.parameters()])
-        weights = tuple([tuple(p.size()) for p in module.parameters()])
-        total_params += params
-        tmpstr += '  (' + key + '): ' + modstr
-        if show_weights:
-            tmpstr += ', weights={}'.format(weights)
-        if show_parameters:
-            tmpstr += ', parameters={}'.format(params)
-        tmpstr += '\n'
-        # get_output_shape(model,module)
-        # if hasattr(module,'output'):
-        #    tmpstr += ' output_shape={}'.format(module.output.size())
-        #    tmpstr += '\n'   
-    tmpstr = tmpstr + ')'
-    tmpstr = tmpstr + '\n total number of parameters={}'.format(total_params)
-    return tmpstr
-
-
-class STN3d(nn.Module):
-    def __init__(self, num_points=2500):
-        super(STN3d, self).__init__()
-        self.num_points = num_points
-
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
-        self.conv2 = torch.nn.Conv1d(64, 128, 1)
-        self.conv3 = torch.nn.Conv1d(128, 1024, 1)
-        self.mp1 = torch.nn.MaxPool1d(num_points)
-        self.fc1 = nn.Linear(1024, 512)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, 9)
-        self.relu = nn.ReLU()
-        self.bn1 = nn.BatchNorm1d(64)
-        self.bn2 = nn.BatchNorm1d(128)
-        self.bn3 = nn.BatchNorm1d(1024)
-        self.bn4 = nn.BatchNorm1d(512)
-        self.bn5 = nn.BatchNorm1d(256)
-
-    def forward(self, x):
-        batchsize = x.size()[0]
-
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = self.mp1(x)
-        x = x.view(-1, 1024)
-
-        x = F.relu(self.bn4(self.fc1(x)))
-        x = F.relu(self.bn5(self.fc2(x)))
-        x = self.fc3(x)
-
-        iden = Variable(torch.from_numpy(np.array([1, 0, 0, 0, 1, 0, 0, 0, 1]).astype(np.float32))).view(1, 9).repeat( batchsize, 1)
-        # TODO: NOOP
-        if x.is_cuda:
-            iden = iden.cuda()
-        x = x + iden
-        x = x.view(-1, 3, 3)
-        return x
-
-
-class PointNetfeat(nn.Module):
-    def __init__(self, num_points=2500, global_feat=True):
-        super(PointNetfeat, self).__init__()
-        self.stn = STN3d(num_points=num_points)
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
-        self.conv2 = torch.nn.Conv1d(64, 128, 1)
-        self.conv3 = torch.nn.Conv1d(128, 1024, 1)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.bn2 = nn.BatchNorm1d(128)
-        self.bn3 = nn.BatchNorm1d(1024)
-        self.mp1 = torch.nn.MaxPool1d(num_points)
-        self.num_points = num_points
-        self.global_feat = global_feat
-
-    def forward(self, x):
-        batchsize = x.size()[0]
-        trans = self.stn(x)
-        x = x.transpose(2, 1)
-        x = torch.bmm(x, trans)
-        x = x.transpose(2, 1)
-        x = F.relu(self.bn1(self.conv1(x)))
-        pointfeat = x
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = self.bn3(self.conv3(x))
-        x = self.mp1(x)
-        x = x.view(-1, 1024)
-        if self.global_feat:
-            return x, trans
-        else:
-            x = x.view(-1, 1024, 1).repeat(1, 1, self.num_points)
-            return torch.cat([x, pointfeat], 1), trans
-
-
-class PointNetCls(nn.Module):
-    def __init__(self, num_points=2500, k=16):
-        super(PointNetCls, self).__init__()
-        self.num_points = num_points
-        self.feat = PointNetfeat(num_points, global_feat=True)
-        self.fc1 = nn.Linear(1024, 512)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, k)
-        # num_ftrs += cls.fc3.in_features
-        # cls.fc3 = nn.Linear(num_ftrs,51)
-        self.bn1 = nn.BatchNorm1d(512)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x, trans = self.feat(x)
-        x = F.relu(self.bn1(self.fc1(x)))
-        x = F.relu(self.bn2(self.fc2(x)))
-        x = self.fc3(x)
-        return F.log_softmax(x), trans
-
-
-cls = PointNetCls(k=16)
-cls.load_state_dict(torch.load(
-    '/home/alessandrodm/tesi/pointnet_weights/cls/cls_model_24.pth',
-    map_location=lambda storage, loc: storage
-))
-
-num_ftrs = cls.fc3.in_features
-print('num:' + str(num_ftrs))
-print(cls.fc3)
-cls.fc3 = nn.Linear(num_ftrs, 51)
-print(cls.fc3)
-
-
-class ResidualBlock(nn.Module):
-    def __init__(self, filters, pad=1):
-        super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(filters, filters, kernel_size=3, stride=1, padding=pad, bias=True)
-        self.bn1 = nn.BatchNorm2d(filters)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(filters, filters, kernel_size=3, stride=1, padding=pad, bias=True)
-        self.bn2 = nn.BatchNorm2d(filters)
-        self.downsample = None
-        self.filters = filters
-
-    def forward(self, x):
-        residual = x
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-        if self.downsample:
-            residual = self.downsample(x)
-        out += residual
-        out = self.relu(out)
-        return out
-
-
-class resize_filters(nn.Module):
-    def __init__(self, filters_in, filters_out):
-        super(resize_filters, self).__init__()
-        self.conv1 = nn.Conv2d(filters_in, filters_out, kernel_size=1, stride=1, padding=0, bias=False)
-        self.bn1 = nn.BatchNorm2d(filters_out)
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        return out
 
 
 class DECO(nn.Module):
@@ -237,7 +20,6 @@ class DECO(nn.Module):
         self.bn1 = nn.BatchNorm2d(64)
         self.rb1 = ResidualBlock(64)
         self.rb2 = ResidualBlock(64)
-        self.rb3 = ResidualBlock(64)
         self.rb4 = ResidualBlock(64)
         self.rb5 = ResidualBlock(64)
         self.rb6 = ResidualBlock(64)
@@ -294,7 +76,7 @@ class DECO(nn.Module):
         x = self.fc2(x)
         x = F.log_softmax(x)
         x = x.view(x.size(0), 3, 2500)
-        return self.feat(x)
+        return x
 
     def forward_fc2(self, x):
         x = x.view(x.size(0), 1, 224, 224)
@@ -321,8 +103,8 @@ class DECO(nn.Module):
 class DECO_medium_conv(nn.Module):
     def __init__(self, drop=0.0, softmax=True):
         super(DECO_medium_conv, self).__init__()
-        # self.feat = PointNetCls(num_points = 2500, k = 51)
-        self.feat = cls
+        # TODO: pointNet.fc3 = torch.nn.Linear(pointNet.fc3.in_features, 51)
+        self.classifier = pointnet.PointNetClassifier(k=16)
         self.drop = drop
         self.softmax = softmax
         # self.feat = PointNetfeat(num_points = 2500, global_feat = True)
@@ -444,7 +226,7 @@ class DECO_medium_conv(nn.Module):
         if self.softmax:
             x = F.relu(x)
         x = x.view(x.size(0), 3, 2500)
-        return self.feat(x)
+        return self.classifier(x)
 
 
 class DECO_senet(nn.Module):
@@ -625,52 +407,41 @@ class DECO_heavy_conv(nn.Module):
         return self.feat(x)
 
 
-class PointNetDenseCls(nn.Module):
-    def __init__(self, num_points=2500, k=51):
-        super(PointNetDenseCls, self).__init__()
-        self.num_points = num_points
-        self.k = k
-        self.feat = PointNetfeat(num_points, global_feat=False)
-        self.conv1 = torch.nn.Conv1d(1088, 512, 1)
-        self.conv2 = torch.nn.Conv1d(512, 256, 1)
-        self.conv3 = torch.nn.Conv1d(256, 128, 1)
-        self.conv4 = torch.nn.Conv1d(128, self.k, 1)
-        self.bn1 = nn.BatchNorm1d(512)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.bn3 = nn.BatchNorm1d(128)
+class ResidualBlock(nn.Module):
+    def __init__(self, filters, pad=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(filters, filters, kernel_size=3, stride=1, padding=pad, bias=True)
+        self.bn1 = nn.BatchNorm2d(filters)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(filters, filters, kernel_size=3, stride=1, padding=pad, bias=True)
+        self.bn2 = nn.BatchNorm2d(filters)
+        self.downsample = None
+        self.filters = filters
 
     def forward(self, x):
-        batchsize = x.size()[0]
-        x, trans = self.feat(x)
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = self.conv4(x)
-        x = x.transpose(2, 1).contiguous()
-        x = F.log_softmax(x.view(-1, self.k))
-        x = x.view(batchsize, self.num_points, self.k)
-        return x, trans
+        residual = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        if self.downsample:
+            residual = self.downsample(x)
+        out += residual
+        out = self.relu(out)
+        return out
 
 
-if __name__ == '__main__':
-    sim_data = Variable(torch.rand(32, 3, 2500))
-    trans = STN3d()
-    out = trans(sim_data)
-    print('stn', out.size())
+class resize_filters(nn.Module):
+    def __init__(self, filters_in, filters_out):
+        super(resize_filters, self).__init__()
+        self.conv1 = nn.Conv2d(filters_in, filters_out, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(filters_out)
+        self.relu = nn.ReLU(inplace=True)
 
-    pointfeat = PointNetfeat(global_feat=True)
-    out, _ = pointfeat(sim_data)
-    print('global feat', out.size())
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        return out
 
-    pointfeat = PointNetfeat(global_feat=False)
-    out, _ = pointfeat(sim_data)
-    print('point feat', out.size())
-
-    cls = PointNetCls(k=5)
-
-    out, _ = cls(sim_data)
-    print('class', out.size())
-
-    seg = PointNetDenseCls(k=3)
-    out, _ = seg(sim_data)
-    print('seg', out.size())
