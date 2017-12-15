@@ -24,7 +24,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
 import torch.utils.data as data
 import torchvision as vision
 import h5py
-from main import *
+from bi_deco.main import *
 import torch.utils.data as data
 from PIL import Image
 from PIL import ImageChops

@@ -1,11 +1,13 @@
 from __future__ import print_function
-import deco
-import pointnet
+
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.parallel
 import torch.utils.data
-import torch
-import torch.nn.functional as F
+
+import deco
+import pointnet
 
 
 class BiDeco(nn.Module):
