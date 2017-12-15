@@ -101,7 +101,8 @@ def main():
     if opt.gpu != "":
         model.cuda()
 
-    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9, nesterov=True)
+    # todo use 0.001 as lr
+    optimizer = optim.SGD(model.parameters(), lr=0.007, momentum=0.9, nesterov=True)
     # optimizer = optim.Adam(model.parameters())
     # num_batch = len(train_loader) / opt.batchSize
 
