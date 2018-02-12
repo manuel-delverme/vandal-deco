@@ -95,11 +95,17 @@ class PointNetClassifier(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        x, trans = self.feat(x)
-        x = F.relu(self.bn1(self.fc1(x)))
-        x = F.relu(self.bn2(self.fc2(x)))
-        x = self.fc3(x)
-        return F.log_softmax(x), trans
+        x0, trans = self.feat(x)
+        x1 = F.relu(self.bn1(self.fc1(x0)))
+        x2 = F.relu(self.bn2(self.fc2(x1)))
+        # TODO: mix x0,x1,x2
+        # x_concat = torch.cat((F.relu(x0), x1, x2), dim=1)
+
+        # x = self.fc3(x)
+        # return F.log_softmax(x), trans
+
+        # return x_concat, trans
+        return x2, trans
 
 
 class PointNetDenseCls(nn.Module):

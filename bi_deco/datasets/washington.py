@@ -60,16 +60,20 @@ class WASHINGTON_Dataset(data.Dataset):
 
 
 def load_dataset(data_dir, split, batch_size, preprocess=None):
-    db_dir = os.path.join(data_dir, split)
-    db_dir = os.path.join(db_dir, "train_db")
-    # data_dir'+split+'/train_db'
-    dataset = WASHINGTON_Dataset(data_dir=db_dir, train=True)
+    db_dir = os.path.join(data_dir, "split" + str(split))
+    train_db_dir = os.path.join(db_dir, "train_db")
+    test_db_dir = os.path.join(db_dir, "val_db")
+    dataset = WASHINGTON_Dataset(data_dir=train_db_dir, train=True)
     if preprocess:
-        dataset= preprocess(dataset)
-    training_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1)
+        dataset = preprocess(dataset)
+    training_loader = torch.utils.data.DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True
+    )
 
-    test_dataset = WASHINGTON_Dataset(data_dir='./dataset/'+split+'/val_db', train=False)
+    test_dataset = WASHINGTON_Dataset(data_dir=test_db_dir, train=False)
     if preprocess:
         test_dataset = preprocess(test_dataset)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False, num_workers=1, drop_last=True
+    )
     return training_loader, test_loader

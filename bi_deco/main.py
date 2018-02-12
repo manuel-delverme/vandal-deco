@@ -5,12 +5,12 @@ import os
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # is this even working maybe it has to be declared earlier
-os.environ["CUDA_VISIBLE_DEVICES"] = ""  # CPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # CPU
 
 import argparse
 import numpy as np
 import models.pointnet
-import models.deco
+import models.deco_old
 import models.bi_deco
 import datasets.washington
 import torch
@@ -40,6 +40,7 @@ def parser_args():
     parser.add_argument('--num_points', type=int, default=2500, help='input batch size')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--nepoch', type=int, default=25, help='number of epochs to train for')
+    parser.add_argument('--gpu', type=str, default="", help='number of epochs to train for')
     parser.add_argument('--outf', type=str, default='cls', help='output folder')
     parser.add_argument('--model', type=str, default='', help='model path')
     return parser.parse_args()
@@ -82,6 +83,7 @@ def load_pointnet(model_path):
 
 def main():
     opt = parser_args()
+    opt.gpu = "2"
     print(opt)
 
     model = models.bi_deco.BiDeco()
@@ -94,31 +96,56 @@ def main():
     #         for param in layer[1].parameters():
     #             param.requires_grad = False
 
-    train_loader, test_loader = datasets.washington.load_dataset(data_dir='./dataset/', split="5", batch_size=256)
-
-    num_classes = len(train_loader.classes)
-    print('classes', num_classes)
+    BATCH_SIZE = 12
+    import torchvision
+    pipeline = [
+        torchvision.transforms.RandomCrop,  # +5% accuracy on domain transfer
+        # TODO: add more preprocessing
+    ]
+    pipeline = None
+    train_loader, test_loader = datasets.washington.load_dataset(data_dir='/home/alessandrodm/tesi/dataset/', split="5",
+                                                                 batch_size=BATCH_SIZE, preprocess=pipeline)
 
     if opt.gpu != "":
         model.cuda()
 
     # todo use 0.001 as lr
-    optimizer = optim.SGD(model.parameters(), lr=0.007, momentum=0.9, nesterov=True)
+    # optimizer = optim.SGD(model.parameters(), lr=0.007, momentum=0.9, nesterov=True)
+
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.SGD(params, lr=0.007, momentum=0.9, nesterov=True)
+
     # optimizer = optim.Adam(model.parameters())
     # num_batch = len(train_loader) / opt.batchSize
 
+    criterion = torch.nn.CrossEntropyLoss()
+    target_Variable = torch.LongTensor(BATCH_SIZE)
+    import collections
+    losses = collections.deque(maxlen=100)
+
     for epoch in range(opt.nepoch):
+        model.train()
+
         progress_bar = tqdm.tqdm(total=len(train_loader))
         last_test = -1
-        for step, (points, y_target) in enumerate(train_loader, 0):
+        for step, (depths, y_target) in enumerate(train_loader, 0):
             progress_bar.update(1)
-            points, y_target = Variable(points), Variable(y_target[:, 0])
-            points = points.transpose(2, 1)
-            points, y_target = points.cuda(), y_target.cuda()
+            y_target = target_Variable.copy_(y_target)
+
+            depths, y_target = Variable(depths), Variable(y_target)
+
+            # depths = Variable(depths)
+            depths = depths.transpose(2, 1)
+            if opt.gpu != "":
+                depths, y_target = depths.cuda(), y_target.cuda()
             optimizer.zero_grad()
 
-            y_pred, _ = model(points)
-            loss = F.nll_loss(y_pred, y_target)
+            y_pred = model(depths)
+            # loss = F.nll_loss(y_pred, y_target)
+            # loss = F.binary_cross_entropy_with_logits(y_pred, y_target)
+            loss = criterion(y_pred, y_target)
+            losses.append(loss)
+            print("avg loss", sum(losses) / len(losses))
             loss.backward()
             optimizer.step()
             pred_choice = y_pred.data.max(1)[1]
@@ -126,13 +153,15 @@ def main():
             progress_bar.set_description('train loss: {} accuracy: {}'.format(
                 loss.data[0], correct / float(opt.batchSize), last_test
             ))
+            # break
 
         model.eval()
-        j, (points, y_target) = enumerate(test_loader, 0).next()
-        points, y_target = Variable(points), Variable(y_target[:, 0])
-        points = points.transpose(2, 1)
-        points, y_target = points.cuda(), y_target.cuda()
-        y_pred, _ = model(points)
+        j, (depths, y_target) = enumerate(test_loader, 0).next()
+        depths, y_target = Variable(depths), Variable(y_target)
+        depths = depths.transpose(2, 1)
+        if opt.gpu != "":
+            depths, y_target = depths.cuda(), y_target.cuda()
+        y_pred, _ = model(depths)
         pred_choice = y_pred.data.max(1)[1]
         correct = pred_choice.eq(y_target.data).cpu().sum()
         last_test = correct / float(opt.batchSize)
