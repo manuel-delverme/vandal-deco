@@ -12,7 +12,7 @@ import alex_net
 
 
 class BiDeco(nn.Module):
-    def __init__(self, dropout_probability=0.0):
+    def __init__(self, dropout_probability=0.5):
         WASHINGTON_CLASSES = 51
 
         super(BiDeco, self).__init__()
@@ -21,7 +21,7 @@ class BiDeco(nn.Module):
         self.alexNet_classifier = alex_net.alexnet(pretrained=True)
 
         self.pointNet_deco = deco.DECO(alex_net=False)
-        self.pointNet_classifier = pointnet.PointNetClassifier(k=WASHINGTON_CLASSES)
+        self.pointNet_classifier = pointnet.PointNetClassifier(k=WASHINGTON_CLASSES, pretrained=True)
 
         self.dropout = torch.nn.Dropout(p=dropout_probability)
 
@@ -51,18 +51,18 @@ class BiDeco(nn.Module):
                 for param in network_module.parameters():
                     param.requires_grad = False
 
-        # self.alexNet_classifier.classifier[6].requires_grad = True
-        # self.pointNet_classifier.fc3.requires_grad = True
+        # self.alexNet_classifier.classifier[4].requires_grad = True
+        # self.pointNet_classifier.fc2.requires_grad = True
 
         # self.dropout = F.dropout()
 
     def forward(self, x):
         # /home/deco2/python/Alex.py
         h_alex = self.alexNet_deco(x)
-        print(h_alex.size())
+        # print(h_alex.size())
         h_alex = self.alexNet_classifier(h_alex)
-        print(h_alex.size())
-        print("POINTNET\t" * 10)
+        # print(h_alex.size())
+        # print("POINTNET\t" * 10)
 
         h_pointnet = self.pointNet_deco(x)
         batch_size, dim1 = h_pointnet.size()
@@ -73,12 +73,15 @@ class BiDeco(nn.Module):
         h_concat = torch.cat((h_alex, h_pointnet), dim=1)
 
         # TODO: remove? TRY IT OUT
-        h_dropout = self.dropout(h_concat)
+        # h_dropout = self.dropout(h_concat)
+        h_dropout = h_concat
 
         prediction = self.ensemble(h_dropout)
 
-        y_hat = F.log_softmax(prediction)
-        return y_hat
+        # y_hat = F.log_softmax(prediction)
+        # return y_hat
+        return prediction
+
         # x = x.view(x.size(0), 1, 224, 224)
         # x = x.view(x.size(0), self.n_size)
         # x = F.relu(self.fc1(x))

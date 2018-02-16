@@ -5,10 +5,13 @@ import os
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # is this even working maybe it has to be declared earlier
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # CPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # CPU
 
+import pickle
+import collections
 import argparse
 import numpy as np
+import matplotlib.pyplot as plt
 import models.pointnet
 import models.deco_old
 import models.bi_deco
@@ -39,7 +42,7 @@ def parser_args():
     parser.add_argument('--batchSize', type=int, default=32, help='input batch size')
     parser.add_argument('--num_points', type=int, default=2500, help='input batch size')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
-    parser.add_argument('--nepoch', type=int, default=25, help='number of epochs to train for')
+    parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
     parser.add_argument('--gpu', type=str, default="", help='number of epochs to train for')
     parser.add_argument('--outf', type=str, default='cls', help='output folder')
     parser.add_argument('--model', type=str, default='', help='model path')
@@ -83,7 +86,12 @@ def load_pointnet(model_path):
 
 def main():
     opt = parser_args()
-    opt.gpu = "2"
+
+    # ############ ALSO CHANGE ############
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # CPU
+    opt.gpu = "3"
+    # ############ ALSO CHANGE ############
+
     print(opt)
 
     model = models.bi_deco.BiDeco()
@@ -96,7 +104,7 @@ def main():
     #         for param in layer[1].parameters():
     #             param.requires_grad = False
 
-    BATCH_SIZE = 12
+    BATCH_SIZE = 8
     import torchvision
     pipeline = [
         torchvision.transforms.RandomCrop,  # +5% accuracy on domain transfer
@@ -120,15 +128,25 @@ def main():
 
     criterion = torch.nn.CrossEntropyLoss()
     target_Variable = torch.LongTensor(BATCH_SIZE)
-    import collections
-    losses = collections.deque(maxlen=100)
+
+    epoch_train_loss = []
+    epochs_loss = []
+    epochs_accuracy = []
 
     for epoch in range(opt.nepoch):
+        print("EPOCH {}/{} ".format(epoch, opt.nepoch))
         model.train()
 
         progress_bar = tqdm.tqdm(total=len(train_loader))
-        last_test = -1
+        epoch_losses = collections.deque(maxlen=100)
         for step, (depths, y_target) in enumerate(train_loader, 0):
+            if step > 200:
+                break
+
+            if step > len(train_loader)/2:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = 0.001
+
             progress_bar.update(1)
             y_target = target_Variable.copy_(y_target)
 
@@ -141,31 +159,63 @@ def main():
             optimizer.zero_grad()
 
             y_pred = model(depths)
-            # loss = F.nll_loss(y_pred, y_target)
-            # loss = F.binary_cross_entropy_with_logits(y_pred, y_target)
             loss = criterion(y_pred, y_target)
-            losses.append(loss)
-            print("avg loss", sum(losses) / len(losses))
             loss.backward()
+            loss_ = loss.cpu().data[0]
+            epoch_losses.append(loss_)
+            progress_bar.set_description("training loss {}, avg {}".format(loss_, np.mean(epoch_losses)))
             optimizer.step()
-            pred_choice = y_pred.data.max(1)[1]
-            correct = pred_choice.eq(y_target.data).cpu().sum()
-            progress_bar.set_description('train loss: {} accuracy: {}'.format(
-                loss.data[0], correct / float(opt.batchSize), last_test
-            ))
-            # break
 
+        epoch_train_loss.append(sum(epoch_losses)/len(epoch_losses))
+        test_samples = 0
+        test_losses = []
+        test_accuracies = []
+        freqs = {i: 0 for i in range(51)}
         model.eval()
-        j, (depths, y_target) = enumerate(test_loader, 0).next()
-        depths, y_target = Variable(depths), Variable(y_target)
-        depths = depths.transpose(2, 1)
-        if opt.gpu != "":
-            depths, y_target = depths.cuda(), y_target.cuda()
-        y_pred, _ = model(depths)
-        pred_choice = y_pred.data.max(1)[1]
-        correct = pred_choice.eq(y_target.data).cpu().sum()
-        last_test = correct / float(opt.batchSize)
-        torch.save(model.state_dict(), '{}/cls_model_{:d}.pth'.format(opt.outf, epoch))
+
+        progress_bar.close()
+        progress_bar = tqdm.tqdm(total=len(train_loader))
+        for test_step, (depths, y_target) in enumerate(test_loader):
+            progress_bar.update(1)
+            y_target = target_Variable.copy_(y_target)
+            depths, y_target = Variable(depths), Variable(y_target)
+
+            # depths = Variable(depths)
+            depths = depths.transpose(2, 1)
+            if opt.gpu != "":
+                depths, y_target = depths.cuda(), y_target.cuda()
+
+            y_pred = model(depths)
+
+            loss = criterion(y_pred, y_target).cpu().data[0]
+            pred_choice = y_pred.data.max(1)[1]  # [1] is argmax, [0] would be max
+
+            test_losses.append(loss)
+            for p in pred_choice:
+                freqs[p] += 1
+            accuracy = pred_choice.eq(y_target.data).cpu().sum()
+            progress_bar.set_description("accuracy {}".format(np.mean(test_accuracies)))
+            test_accuracies.append(accuracy)
+            test_samples += 1
+
+        print("frequencies:".format({k: v for k, v in freqs.items() if v > 0}))
+        progress_bar.close()
+        epochs_loss.append((sum(test_losses) / test_samples))
+        epochs_accuracy.append((sum(test_accuracies) / test_samples))
+
+        print("acc")
+        print("acc", epochs_accuracy)
+        print("loss", epochs_loss)
+
+        torch.save(model.state_dict(), 'state_dicts/cls_model_{:d}.pth'.format(epoch))
+
+    with open("statistics/stats.pkl", "w") as fout:
+        pickle.dump((epoch_train_loss, epochs_loss, epochs_accuracy), fout)
+
+    plt.plot(epoch_train_loss)
+    plt.plot(epochs_loss)
+    plt.plot(epochs_accuracy)
+    plt.savefig("plots/metrics.png")
 
 
 if __name__ == "__main__":
