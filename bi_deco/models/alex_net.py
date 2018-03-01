@@ -43,11 +43,11 @@ class AlexNet(nn.Module):
 
     def forward(self, x):
         x = self.features(x)
-        x = x.view(x.size(0), 256 * 6 * 6)
-        # x = self.classifier(x)
-        for layer_nr in range(6):
-            # print("layer", layer_nr, self.classifier[layer_nr])
-            x = self.classifier[layer_nr](x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        # for layer_nr in range(6):
+        #     # print("layer", layer_nr, self.classifier[layer_nr])
+        #     x = self.classifier[layer_nr](x)
         return x
 
 

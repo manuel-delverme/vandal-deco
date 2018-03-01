@@ -23,12 +23,20 @@ class BiDeco(nn.Module):
         self.pointNet_deco = deco.DECO(alex_net=False)
         self.pointNet_classifier = pointnet.PointNetClassifier(k=WASHINGTON_CLASSES, pretrained=True)
 
-        self.dropout = torch.nn.Dropout(p=dropout_probability)
+        # self.dropout = torch.nn.Dropout(p=dropout_probability)
+        self.layer_delle_pari_opportunita = nn.Sequential(
+            torch.nn.Linear(4096, 2048),
+            torch.nn.Linear(2048, 700),
+            torch.nn.Linear(700, 256),
+        )
 
         # as we discussed (use the last layer)
         # not using 5th layer MISLEADING, forward uses RELU
         self.ensemble = torch.nn.Linear(
-            self.alexNet_classifier.classifier[4].out_features + self.pointNet_classifier.fc2.out_features,
+            # self.alexNet_classifier.classifier[4].out_features + self.pointNet_classifier.fc2.out_features,
+            512,
+            # self.alexNet_classifier.classifier[6].out_features + self.pointNet_classifier.fc2.out_features,
+            # 2792,
             WASHINGTON_CLASSES
         )
 
@@ -36,6 +44,7 @@ class BiDeco(nn.Module):
             self.alexNet_deco,
             self.pointNet_deco,
             self.ensemble,
+            self.layer_delle_pari_opportunita,
         ]
         frozen_net = [
             self.alexNet_classifier,
@@ -57,12 +66,12 @@ class BiDeco(nn.Module):
         # self.dropout = F.dropout()
 
     def forward(self, x):
-        # /home/deco2/python/Alex.py
         h_alex = self.alexNet_deco(x)
         # print(h_alex.size())
         h_alex = self.alexNet_classifier(h_alex)
         # print(h_alex.size())
-        # print("POINTNET\t" * 10)
+        h_alex = self.layer_delle_pari_opportunita(h_alex)
+        return h_alex[:51]
 
         h_pointnet = self.pointNet_deco(x)
         batch_size, dim1 = h_pointnet.size()
@@ -70,6 +79,7 @@ class BiDeco(nn.Module):
         h_pointnet, some_trash = self.pointNet_classifier(h_pointnet)
         # TODO: double check for activation in both pointnet and alexNet
 
+        h_alex = self.layer_delle_pari_opportunita(h_alex)
         h_concat = torch.cat((h_alex, h_pointnet), dim=1)
 
         # TODO: remove? TRY IT OUT

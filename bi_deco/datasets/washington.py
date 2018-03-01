@@ -11,7 +11,8 @@ import random
 
 
 class WASHINGTON_Dataset(data.Dataset):
-    def __init__(self, data_dir, image_size=256, train=True):
+    def __init__(self, data_dir, image_size=256, train=True, rgb=False):
+        self.rgb = rgb
         self.image_size = image_size
         self.data_dir = data_dir
         self.train = train
@@ -28,8 +29,11 @@ class WASHINGTON_Dataset(data.Dataset):
         else:
             self.test_data = self.washington_data['data']
             self.test_labels = self.washington_data['label']
-        self.rc = vision.transforms.RandomCrop([224, 224])
-        self.cc = vision.transforms.CenterCrop([224, 224])
+        # self.rc = vision.transforms.RandomCrop([224, 224])
+        # self.cc = vision.transforms.CenterCrop([224, 224])
+        self.rc = vision.transforms.Scale([228, 228])
+        self.cc = vision.transforms.Scale([228, 228])
+
         self.resize = vision.transforms.Scale([224, 224])
         self.toTensor = vision.transforms.ToTensor()
         self.toPIL = vision.transforms.ToPILImage()
@@ -47,6 +51,8 @@ class WASHINGTON_Dataset(data.Dataset):
             data_w = self.cc(data_w)
         rnd_shift = random.randint(-20, 20)
         data_w = ImageChops.offset(data_w, rnd_shift)
+        if self.rgb:
+            data_w = np.stack((data_w, data_w, data_w))
         data_w = self.toTensor(data_w)
         data_w = data_w.float()
         data_w -= self.mean
@@ -59,11 +65,11 @@ class WASHINGTON_Dataset(data.Dataset):
             return self.test_data.shape[0]
 
 
-def load_dataset(data_dir, split, batch_size, preprocess=None):
+def load_dataset(data_dir, split, batch_size, preprocess=None, rgb=False):
     db_dir = os.path.join(data_dir, "split" + str(split))
     train_db_dir = os.path.join(db_dir, "train_db")
     test_db_dir = os.path.join(db_dir, "val_db")
-    dataset = WASHINGTON_Dataset(data_dir=train_db_dir, train=True)
+    dataset = WASHINGTON_Dataset(data_dir=train_db_dir, train=True, rgb=rgb)
     if preprocess:
         dataset = preprocess(dataset)
     training_loader = torch.utils.data.DataLoader(

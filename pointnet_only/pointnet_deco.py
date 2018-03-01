@@ -1,34 +1,36 @@
 from __future__ import print_function
-import tqdm
+from __future__ import print_function
 
 import os
+import tqdm
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # is this even working maybe it has to be declared earlier
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # CPU
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.nn.parallel
+import torch.utils.data
+import bi_deco.models.alex_net
 import pickle
 import collections
-import argparse
 import numpy as np
 import matplotlib.pyplot as plt
-import models.pointnet
-import models.deco_old
-import models.bi_deco
-import datasets.washington
+import bi_deco.models.pointnet
+import bi_deco.models.deco_old
+import bi_deco.models.bi_deco
+import bi_deco.datasets.washington
 import torch
 import torch.nn.parallel
 import torch.utils.data
-from torch.autograd import Variable
-from torch.nn.modules.module import _addindent
 import argparse
 import os
-import random
 import torch.optim as optim
 import torch.utils.data
 import torch.nn
 from torch.autograd import Variable
-import torch.nn.functional as F
 
 # RESOURCES_HOME = "/home/iodice/vandal-deco/progetto-alessandro/tesi/tesi/"
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
@@ -37,9 +39,34 @@ CLASSIFIER_WEIGHTS = '/home/alessandrodm/tesi/pointnet_weights/cls/cls_model_24.
 BLUEIZE = lambda x: '\033[94m' + x + '\033[0m'
 
 
+class Pointnet_only(nn.Module):
+    def __init__(self):
+        WASHINGTON_CLASSES = 51
+        super(Pointnet_only, self).__init__()
+
+        self.pointNet_classifier = bi_deco.models.pointnet.PointNetClassifier(pretrained=True)
+        self.ensemble = torch.nn.Linear(
+            self.alexNet_classifier.classifier[6].out_features,
+            WASHINGTON_CLASSES
+        )
+
+        for net in [self.alexNet_classifier]:
+            for name, network_module in net.named_children():
+                for param in network_module.parameters():
+                    param.requires_grad = False
+
+        self.alexNet_classifier.classifier[6].requires_grad = True
+        # self.dropout = F.dropout()
+
+    def forward(self, x):
+        h_alex = self.alexNet_classifier(x)
+        prediction = self.ensemble(F.relu(h_alex))
+        return prediction
+
+
 def parser_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batchSize', type=int, default=32, help='input batch size')
+    parser.add_argument('--batchSize', type=int, default=36, help='input batch size')
     parser.add_argument('--num_points', type=int, default=2500, help='input batch size')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
@@ -68,67 +95,27 @@ def load_data(opt):
         os.makedirs(root_data)
         print("storing data in ", root_data)
     Batch_size = 24
-    test_dataset = datasets.washington.WASHINGTON_Dataset(data_dir=RESOURCES_HOME + '/dataset/' + split + '/val_db',
-                                                          train=False)
+    test_dataset = bi_deco.datasets.washington.WASHINGTON_Dataset(data_dir=RESOURCES_HOME + '/dataset/' + split + '/val_db',
+                                                                  train=False)
     testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=Batch_size, shuffle=False, num_workers=1)
     return testdataloader
 
 
-def load_pointnet(model_path):
-    try:
-        state_dict = torch.load(model_path, map_location=lambda storage, loc: storage)
-        pointNet.load_state_dict(state_dict)
-    except IOError:
-        model = train_pointnet()
-        model.save_state_dict(model_path)
-    return model
-
-
 def main():
     opt = parser_args()
-
-    # ############ ALSO CHANGE ############
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # CPU
     opt.gpu = "3"
-    # ############ ALSO CHANGE ############
-
-    print(opt)
-
-    model = models.bi_deco.BiDeco()
-    print(model)
-    # model = models.deco.DECO_medium_conv()
-
-    # move the following inside BiDeco, freeze alexnet && pointnet
-    # # freeze the classifier parameters
-    # for layer in model.classifier.named_children():
-    #     if layer[0] not in ('fc3',):
-    #         for param in layer[1].parameters():
-    #             param.requires_grad = False
-
-    BATCH_SIZE = 8
-    import torchvision
-    pipeline = [
-        torchvision.transforms.RandomCrop,  # +5% accuracy on domain transfer
-        # TODO: add more preprocessing
-    ]
-    pipeline = None
-    train_loader, test_loader = datasets.washington.load_dataset(data_dir='/home/alessandrodm/tesi/dataset/', split="5",
-                                                                 batch_size=BATCH_SIZE, preprocess=pipeline)
-
+    model = Alexnet_only()
     if opt.gpu != "":
         model.cuda()
-
-    # todo use 0.001 as lr
-    # optimizer = optim.SGD(model.parameters(), lr=0.007, momentum=0.9, nesterov=True)
+    print(model)
+    train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
+        data_dir='/home/alessandrodm/tesi/dataset/', split="5", batch_size=opt.batchSize, rgb=True)
 
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.SGD(params, lr=0.007, momentum=0.9, nesterov=True)
 
-    # optimizer = optim.Adam(model.parameters())
-    # num_batch = len(train_loader) / opt.batchSize
-
     criterion = torch.nn.CrossEntropyLoss()
-    target_Variable = torch.LongTensor(BATCH_SIZE)
+    target_Variable = torch.LongTensor(opt.batchSize)
 
     epoch_train_loss = []
     epochs_loss = []
@@ -141,7 +128,7 @@ def main():
         progress_bar = tqdm.tqdm(total=len(train_loader))
         epoch_losses = collections.deque(maxlen=100)
         for step, (depths, y_target) in enumerate(train_loader, 0):
-            if step > len(train_loader)/2:
+            if step > len(train_loader) / 2:
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = 0.001
 
@@ -164,7 +151,7 @@ def main():
             progress_bar.set_description("training loss {}, avg {}".format(loss_, np.mean(epoch_losses)))
             optimizer.step()
 
-        epoch_train_loss.append(sum(epoch_losses)/len(epoch_losses))
+        epoch_train_loss.append(sum(epoch_losses) / len(epoch_losses))
         test_samples = 0
         test_losses = []
         test_accuracies = []
