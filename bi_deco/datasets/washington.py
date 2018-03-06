@@ -29,10 +29,8 @@ class WASHINGTON_Dataset(data.Dataset):
         else:
             self.test_data = self.washington_data['data']
             self.test_labels = self.washington_data['label']
-        # self.rc = vision.transforms.RandomCrop([224, 224])
-        # self.cc = vision.transforms.CenterCrop([224, 224])
-        self.rc = vision.transforms.Scale([228, 228])
-        self.cc = vision.transforms.Scale([228, 228])
+        self.rc = vision.transforms.RandomCrop([224, 224])
+        self.cc = vision.transforms.CenterCrop([224, 224])
 
         self.resize = vision.transforms.Scale([224, 224])
         self.toTensor = vision.transforms.ToTensor()
