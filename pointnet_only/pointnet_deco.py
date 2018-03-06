@@ -1,13 +1,27 @@
 from __future__ import print_function
-from __future__ import print_function
-
 import os
-import tqdm
+import argparse
+
+
+def parser_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--batchSize', type=int, default=16, help='input batch size')
+    parser.add_argument('--nr_points', type=int, default=2500, help='input batch size')
+    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+    parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
+    parser.add_argument('--gpu', type=str, default="3", help='number of epochs to train for')
+    parser.add_argument('--outf', type=str, default='cls', help='output folder')
+    parser.add_argument('--model', type=str, default='', help='model path')
+    return parser.parse_args()
+
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # is this even working maybe it has to be declared earlier
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # CPU
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # CPU
+opt = parser_args()
+os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
 
+import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,182 +39,152 @@ import bi_deco.datasets.washington
 import torch
 import torch.nn.parallel
 import torch.utils.data
-import argparse
 import os
-import torch.optim as optim
+import torch.optim
 import torch.utils.data
 import torch.nn
 from torch.autograd import Variable
 
-# RESOURCES_HOME = "/home/iodice/vandal-deco/progetto-alessandro/tesi/tesi/"
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
 RESULTS_HOME = "/home/iodice/alessandro_results/"
-CLASSIFIER_WEIGHTS = '/home/alessandrodm/tesi/pointnet_weights/cls/cls_model_24.pth'
-BLUEIZE = lambda x: '\033[94m' + x + '\033[0m'
 
 
-class Pointnet_only(nn.Module):
-    def __init__(self):
+class Pointnet_Deco(nn.Module):
+    def __init__(self, nr_points=2500):
         WASHINGTON_CLASSES = 51
-        super(Pointnet_only, self).__init__()
-
-        self.pointNet_classifier = bi_deco.models.pointnet.PointNetClassifier(pretrained=True)
-        self.ensemble = torch.nn.Linear(
-            self.alexNet_classifier.classifier[6].out_features,
-            WASHINGTON_CLASSES
+        super(Pointnet_Deco, self).__init__()
+        self.pointNet_classifier = bi_deco.models.pointnet.PointNetClassifier(
+            num_points=nr_points, pretrained=True, k=WASHINGTON_CLASSES
         )
-
-        for net in [self.alexNet_classifier]:
-            for name, network_module in net.named_children():
-                for param in network_module.parameters():
-                    param.requires_grad = False
-
-        self.alexNet_classifier.classifier[6].requires_grad = True
-        # self.dropout = F.dropout()
+        self.pointNet_deco = bi_deco.models.deco.DECO(alex_net=False, nr_points=nr_points)
 
     def forward(self, x):
-        h_alex = self.alexNet_classifier(x)
-        prediction = self.ensemble(F.relu(h_alex))
-        return prediction
-
-
-def parser_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--batchSize', type=int, default=36, help='input batch size')
-    parser.add_argument('--num_points', type=int, default=2500, help='input batch size')
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
-    parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
-    parser.add_argument('--gpu', type=str, default="", help='number of epochs to train for')
-    parser.add_argument('--outf', type=str, default='cls', help='output folder')
-    parser.add_argument('--model', type=str, default='', help='model path')
-    return parser.parse_args()
-
-
-def load_data(opt):
-    model_to_use = 'not_frozen' if opt.train_pointnet else 'frozen'
-    split = opt.dset
-    folder = '/' + split + '/' + model_to_use + '/fc' + str(opt.nfc) + '/'
-
-    root_weights = RESULTS_HOME + './weights' + folder
-    root_data = RESULTS_HOME + './data_acc_loss' + folder
-
-    if opt.model == '' and (os.path.exists(root_weights) or os.path.exists(root_data)):
-        print('Directory Exists')
-        exit()
-
-    if not os.path.exists(root_weights):
-        os.makedirs(root_weights)
-        print("storing weigths in ", root_weights)
-    if not os.path.exists(root_data):
-        os.makedirs(root_data)
-        print("storing data in ", root_data)
-    Batch_size = 24
-    test_dataset = bi_deco.datasets.washington.WASHINGTON_Dataset(data_dir=RESOURCES_HOME + '/dataset/' + split + '/val_db',
-                                                                  train=False)
-    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=Batch_size, shuffle=False, num_workers=1)
-    return testdataloader
+        point_cloud = self.pointNet_deco(x)
+        y_pointNet = self.pointNet_classifier(point_cloud)
+        return y_pointNet
 
 
 def main():
     opt = parser_args()
-    opt.gpu = "3"
-    model = Alexnet_only()
+    # opt.gpu = "2"
+    classifier = Pointnet_Deco(opt.nr_points)
     if opt.gpu != "":
-        model.cuda()
-    print(model)
+        classifier.cuda()
+    print(classifier)
     train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
-        data_dir='/home/alessandrodm/tesi/dataset/', split="5", batch_size=opt.batchSize, rgb=True)
+        data_dir='/home/alessandrodm/tesi/dataset/', split="5", batch_size=opt.batchSize)
 
-    params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.SGD(params, lr=0.007, momentum=0.9, nesterov=True)
+    crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
+    # optimizer = torch.optim.SGD(get_trainable_params(model), lr=0.007, momentum=0.9, nesterov=True)
+    class_optimizer = torch.optim.SGD(get_trainable_params(classifier), lr=0.007, momentum=0.9, nesterov=True)
 
-    criterion = torch.nn.CrossEntropyLoss()
     target_Variable = torch.LongTensor(opt.batchSize)
 
     epoch_train_loss = []
-    epochs_loss = []
+    epochs_test_loss = []
     epochs_accuracy = []
-
     for epoch in range(opt.nepoch):
         print("EPOCH {}/{} ".format(epoch, opt.nepoch))
-        model.train()
-
-        progress_bar = tqdm.tqdm(total=len(train_loader))
+        classifier.train()
         epoch_losses = collections.deque(maxlen=100)
-        for step, (depths, y_target) in enumerate(train_loader, 0):
-            if step > len(train_loader) / 2:
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = 0.001
+        progress_bar = tqdm.tqdm(total=len(train_loader))
 
+        for step, (inputs, labels) in enumerate(train_loader, 0):
             progress_bar.update(1)
-            y_target = target_Variable.copy_(y_target)
-
-            depths, y_target = Variable(depths), Variable(y_target)
-
-            # depths = Variable(depths)
-            depths = depths.transpose(2, 1)
+            # if step > 5:
+            #     break
+            labels = target_Variable.copy_(labels)
+            inputs, labels = Variable(inputs), Variable(labels)
             if opt.gpu != "":
-                depths, y_target = depths.cuda(), y_target.cuda()
-            optimizer.zero_grad()
+                inputs, labels = inputs.cuda(), labels.cuda()
+            # inputs = torch.cat([inputs, inputs, inputs], 1)
 
-            y_pred = model(depths)
-            loss = criterion(y_pred, y_target)
-            loss.backward()
-            loss_ = loss.cpu().data[0]
+            class_pred = classifier(inputs)
+            class_loss = crossEntropyLoss(class_pred, labels)
+
+            class_optimizer.zero_grad()
+            class_loss.backward()
+            class_optimizer.step()
+
+            loss_ = class_loss.data[0]
+
             epoch_losses.append(loss_)
-            progress_bar.set_description("training loss {}, avg {}".format(loss_, np.mean(epoch_losses)))
-            optimizer.step()
+            progress_bar.set_description("avg {}".format(np.round(np.mean(epoch_losses), 2)))
 
         epoch_train_loss.append(sum(epoch_losses) / len(epoch_losses))
-        test_samples = 0
-        test_losses = []
-        test_accuracies = []
-        freqs = {i: 0 for i in range(51)}
-        model.eval()
 
-        progress_bar.close()
-        progress_bar = tqdm.tqdm(total=len(train_loader))
-        for test_step, (depths, y_target) in enumerate(test_loader):
-            progress_bar.update(1)
-            y_target = target_Variable.copy_(y_target)
-            depths, y_target = Variable(depths), Variable(y_target)
-
-            # depths = Variable(depths)
-            depths = depths.transpose(2, 1)
-            if opt.gpu != "":
-                depths, y_target = depths.cuda(), y_target.cuda()
-
-            y_pred = model(depths)
-
-            loss = criterion(y_pred, y_target).cpu().data[0]
-            pred_choice = y_pred.data.max(1)[1]  # [1] is argmax, [0] would be max
-
-            test_losses.append(loss)
-            for p in pred_choice:
-                freqs[p] += 1
-            accuracy = pred_choice.eq(y_target.data).cpu().sum()
-            progress_bar.set_description("accuracy {}".format(np.mean(test_accuracies)))
-            test_accuracies.append(accuracy)
-            test_samples += 1
-
-        print("frequencies:".format({k: v for k, v in freqs.items() if v > 0}))
-        progress_bar.close()
-        epochs_loss.append((sum(test_losses) / test_samples))
-        epochs_accuracy.append((sum(test_accuracies) / test_samples))
+        test_accuracy, test_loss = test(crossEntropyLoss, classifier, opt, test_loader)
+        epochs_test_loss.append(test_loss)
+        epochs_accuracy.append(test_accuracy)
 
         print("acc")
         print("acc", epochs_accuracy)
-        print("loss", epochs_loss)
+        print("loss", epochs_test_loss)
 
-        torch.save(model.state_dict(), 'state_dicts/cls_model_{:d}.pth'.format(epoch))
+        try:
+            os.mkdir('state_dicts/')
+        except:
+            pass
+        torch.save(classifier.state_dict(), 'state_dicts/cls_model_{:d}.pth'.format(epoch))
 
     with open("statistics/stats.pkl", "w") as fout:
-        pickle.dump((epoch_train_loss, epochs_loss, epochs_accuracy), fout)
+        pickle.dump((epoch_train_loss, epochs_test_loss, epochs_accuracy), fout)
 
     plt.plot(epoch_train_loss)
-    plt.plot(epochs_loss)
+    plt.plot(epochs_test_loss)
     plt.plot(epochs_accuracy)
     plt.savefig("plots/metrics.png")
+
+
+def test(CrossEntropyLoss, classifier, opt, test_loader):
+    classifier.eval()
+    correct = 0.0
+    test_loss = 0.0
+    total = 0.0
+    counter = 0.0
+
+    # test_samples = 0
+    # test_losses = []
+    # test_accuracies = []
+    # freqs = {i: 0 for i in range(51)}
+    progress_bar = tqdm.tqdm(total=len(test_loader))
+    target_Variable = torch.LongTensor(opt.batchSize)
+
+    for test_step, (inputs, labels) in enumerate(test_loader):
+        labels = target_Variable.copy_(labels)
+        progress_bar.update(1)
+        if opt.gpu != "":
+            inputs, labels = inputs.cuda(), labels.cuda()
+
+        # labels = target_Variable.copy_(labels)
+        inputs, labels = Variable(inputs), Variable(labels)
+        # inputs = torch.cat([inputs, inputs, inputs], 1)
+
+        class_pred = classifier(inputs)
+        class_loss = CrossEntropyLoss(class_pred, labels)
+        _, predicted = torch.max(class_pred.data, 1)
+        total += labels.size(0)
+        correct += predicted.eq(labels.data).cpu().sum()
+        # for yi_pred, yi_target in zip(predicted, labels.data.cpu()):
+        #     freqs[yi_pred] += 1
+
+        # accuracy = pred_choice.eq(y_target.data).cpu().sum()
+        test_loss += class_loss.data[0]
+        # test_accuracies.append(corrects / float(len(predicted)))
+        progress_bar.set_description("accuracy {}".format(correct / total))
+    # print("frequencies:".format({k: v for k, v in freqs.items() if v > 0}))
+    progress_bar.close()
+    return correct / total, test_loss / total
+
+
+def get_trainable_params(model):
+    params = []
+    print("training parameters:")
+    for name, p in model.named_parameters():
+        if p.requires_grad:
+            print(name)
+            params.append(p)
+    return params
 
 
 if __name__ == "__main__":
