@@ -118,8 +118,9 @@ class SEBasicBlock(nn.Module):
 
 
 class DECO(nn.Module):
-    def __init__(self, alex_net):
+    def __init__(self, alex_net, nr_points):
         super(DECO, self).__init__()
+        self.nr_points = nr_points
         self.alex_net = alex_net
         # 1 input image channel, 6 output channels, 5x5 square convolution
         # kernel
@@ -152,15 +153,15 @@ class DECO(nn.Module):
             self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
             # deconvolution-upsampling porta a 3x228x228
             # TODO: we changed padding from 3 to 0
-            self.deconv = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
-            self.last_layer = self.deconv
+            self.deconv_to_image = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
         else:
             self.last_pool = nn.MaxPool2d(3, stride=2)
             # TODO: dropout here
-            self.last_layer = nn.Linear(64 * 27 * 27, 2500 * 3)
+            self.fc_to_3d_points = nn.Linear(64 * 27 * 27, self.nr_points * 3)
 
     def forward(self, x):
-        x = x.view(x.size(0), 1, 224, 224)
+        batch_size = x.size(0)
+        x = x.view(batch_size, 1, 224, 224)
         # print("x = x.view(x.size(0), 1, 224, 224)", x.size())
         x = self.conv1(x)
         # print("x = self.conv1(x)", x.size())
@@ -191,12 +192,13 @@ class DECO(nn.Module):
             x = self.conv2(x)
             # print("x = self.conv2(x)", x.size())
             # x = self.deconv(x)
+            x = self.deconv_to_image(x)
         else:
             x = self.last_pool(x)
-            x = x.view(x.size(0), -1)
-
-        x = self.last_layer(x)
-        # print("x = self.last_layer(x)", x.size())
+            x = x.view(batch_size, -1)
+            # batch_size, dim1 = x.size()
+            x = self.fc_to_3d_points(x)
+            x = x.view(batch_size, 3, self.nr_points)
         return x
 
 # class DecoAlexNet(nn.Module):

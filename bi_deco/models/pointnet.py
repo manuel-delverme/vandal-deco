@@ -95,17 +95,15 @@ class PointNetClassifier(nn.Module):
         self.relu = nn.ReLU()
         if pretrained:
             self.load_state_dict(torch.load("/home/alessandrodm/pointnet_weights/cls/cls_model_24.pth"))
+            for name, network_module in self.named_children():
+                for param in network_module.parameters():
+                    param.requires_grad = False
         self.fc3 = nn.Linear(self.fc3.in_features, k)
+        self.fc3.requires_grad = True
 
     def forward(self, x):
         x0, trans = self.feat(x)
         x1 = F.relu(self.bn1(self.fc1(x0)))
         x2 = F.relu(self.bn2(self.fc2(x1)))
-        # TODO: mix x0,x1,x2
-        # x_concat = torch.cat((F.relu(x0), x1, x2), dim=1)
-
-        # x = self.fc3(x)
-        # return F.log_softmax(x), trans
-
-        # return x_concat, trans
-        return x2, trans
+        x3 = self.fc3(x2)
+        return x3
