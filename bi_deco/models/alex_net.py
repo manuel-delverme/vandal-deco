@@ -14,7 +14,7 @@ model_urls = {
 
 
 class AlexNet(nn.Module):
-    def __init__(self, num_classes=1000):
+    def __init__(self, num_classes=1000, pretrained=True):
         super(AlexNet, self).__init__()
         self.features = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
@@ -31,15 +31,41 @@ class AlexNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=3, stride=2),
         )
-        self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(256 * 6 * 6, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, num_classes),
-        )
+        if pretrained:
+            self.classifier = nn.Sequential(
+                nn.Dropout(),
+                nn.Linear(256 * 6 * 6, 4096),
+                nn.ReLU(inplace=True),
+                nn.Dropout(),
+                nn.Linear(4096, 4096),
+                nn.ReLU(inplace=True),
+                nn.Linear(4096, 1000),
+            )
+            self.load_state_dict(torch.utils.model_zoo.load_url(model_urls['alexnet']))
+            for name, network_module in self.named_children():
+                for param in network_module.parameters():
+                    param.requires_grad = False
+
+            self.classifier = nn.Sequential(
+                self.classifier[0],
+                self.classifier[1],
+                self.classifier[2],
+                self.classifier[3],
+                self.classifier[4],
+                self.classifier[5],
+                nn.Linear(4096, num_classes),
+            )
+            self.classifier[6].requires_grad = True
+        else:
+            self.classifier = nn.Sequential(
+                nn.Dropout(),
+                nn.Linear(256 * 6 * 6, 4096),
+                nn.ReLU(inplace=True),
+                nn.Dropout(),
+                nn.Linear(4096, 4096),
+                nn.ReLU(inplace=True),
+                nn.Linear(4096, num_classes),
+            )
 
     def forward(self, x):
         x = self.features(x)
@@ -50,14 +76,3 @@ class AlexNet(nn.Module):
         #     x = self.classifier[layer_nr](x)
         return x
 
-
-def alexnet(pretrained=False, **kwargs):
-    r"""AlexNet model architecture from the
-    `"One weird trick..." <https://arxiv.org/abs/1404.5997>`_ paper.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = AlexNet(**kwargs)
-    if pretrained:
-        model.load_state_dict(torch.utils.model_zoo.load_url(model_urls['alexnet']))
-    return model

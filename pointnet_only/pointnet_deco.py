@@ -66,13 +66,16 @@ class Pointnet_Deco(nn.Module):
 
 def main():
     opt = parser_args()
-    # opt.gpu = "2"
+
     classifier = Pointnet_Deco(opt.nr_points)
     if opt.gpu != "":
         classifier.cuda()
     print(classifier)
     train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
-        data_dir='/home/alessandrodm/tesi/dataset/', split="5", batch_size=opt.batchSize)
+        data_dir='/home/alessandrodm/tesi/dataset/',
+        split="5",
+        batch_size=opt.batchSize
+    )
 
     crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
     # optimizer = torch.optim.SGD(get_trainable_params(model), lr=0.007, momentum=0.9, nesterov=True)
