@@ -17,10 +17,10 @@ class BiDeco(nn.Module):
         WASHINGTON_CLASSES = 51
 
         super(BiDeco, self).__init__()
-        self.alexNet_deco = deco.DECO(alex_net=True, nr_points=nr_points)
+        self.alexNet_deco = bi_deco.models.deco.DECO(alex_net=True, nr_points=nr_points)
         self.alexNet_classifier = alex_net.AlexNet(pretrained=True)
 
-        self.pointNet_deco = deco.DECO(alex_net=False, nr_points=nr_points)
+        self.pointNet_deco = bi_deco.models.deco.DECO(alex_net=False, nr_points=nr_points)
         self.pointNet_classifier = pointnet.PointNetClassifier(k=1000, pretrained=True)
 
         self.dropout = torch.nn.Dropout(p=dropout_probability)

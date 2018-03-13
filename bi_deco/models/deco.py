@@ -62,84 +62,35 @@ class ResidualBlock(nn.Module):
         return out
 
 
-class SELayer(nn.Module):
-    def __init__(self, channel, reduction=16):
-        super(SELayer, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channel, reduction),
-            nn.ReLU(inplace=True),
-            nn.Linear(reduction, channel),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y
-
-
 def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
 
 
-class SEBasicBlock(nn.Module):
-    expansion = 1
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None, reduction=16):
-        super(SEBasicBlock, self).__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes, 1)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.se = SELayer(planes, reduction)
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x):
-        residual = x
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.se(out)
-
-        if self.downsample is not None:
-            residual = self.downsample(x)
-
-        out += residual
-        out = self.relu(out)
-
-        return out
-
-
 class DECO(nn.Module):
-    def __init__(self, alex_net, nr_points):
+    def __init__(self, is_alex_net, nr_points):
         super(DECO, self).__init__()
         self.nr_points = nr_points
-        self.alex_net = alex_net
+        self.is_alex_net = is_alex_net
         # 1 input image channel, 6 output channels, 5x5 square convolution
         # kernel
         # convoluzione1
         self.conv1 = nn.Conv2d(1, 64, 7, stride=2, padding=3)
         # BN e Leacky ReLU
+
+        # TODO: check for BatchNorm2D
         self.bn1 = nn.BatchNorm1d(64)
         self.Lrelu = nn.LeakyReLU(negative_slope=0.01)
         # maxPooling
         self.pool = nn.MaxPool2d(3, stride=2)  # 64x57x57
         # 8 blocchi di residual
-        self.res1 = SEBasicBlock(64, 64)
-        self.res2 = SEBasicBlock(64, 64)
-        self.res3 = SEBasicBlock(64, 64)
-        self.res4 = SEBasicBlock(64, 64)
-        self.res5 = SEBasicBlock(64, 64)
-        self.res6 = SEBasicBlock(64, 64)
-        self.res7 = SEBasicBlock(64, 64)
-        self.res8 = SEBasicBlock(64, 64)
+        self.res1 = ResidualBlock(64)
+        self.res2 = ResidualBlock(64)
+        self.res3 = ResidualBlock(64)
+        self.res4 = ResidualBlock(64)
+        self.res5 = ResidualBlock(64)
+        self.res6 = ResidualBlock(64)
+        self.res7 = ResidualBlock(64)
+        self.res8 = ResidualBlock(64)
 
         # convoluzione2
         # self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
@@ -148,11 +99,12 @@ class DECO(nn.Module):
 
         # TODO: we changed padding from 3 to 0
         # self.deconv = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
-        if alex_net:
+        if is_alex_net:
             # convoluzione2
             self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
             # deconvolution-upsampling porta a 3x228x228
-            # TODO: we changed padding from 3 to 0
+
+            # self.deconv_to_image = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
             self.deconv_to_image = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
         else:
             self.last_pool = nn.MaxPool2d(3, stride=2)
@@ -188,7 +140,7 @@ class DECO(nn.Module):
         x = self.res8(x)
         # print("x = self.res8(x)", x.size())
 
-        if self.alex_net:
+        if self.is_alex_net:
             x = self.conv2(x)
             # print("x = self.conv2(x)", x.size())
             # x = self.deconv(x)

@@ -27,15 +27,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.parallel
 import torch.utils.data
-import bi_deco.models.alex_net
 import pickle
 import collections
 import numpy as np
 import matplotlib.pyplot as plt
-import bi_deco.models.pointnet
-import bi_deco.models.deco_old
-import bi_deco.models.bi_deco
-import bi_deco.datasets.washington
+import models.alex_net
+import models.pointnet
+import models.deco_old
+import models.bi_deco
+import datasets.washington
 import torch
 import torch.nn.parallel
 import torch.utils.data
