@@ -120,7 +120,7 @@ def main(experiment_name):
         torchvision.transforms.Normalize((0.5), (0.5))
     ]
 
-    classifier = Bi_Deco(nr_points=opt.nr_points, ensemble_hidden_size=2048)
+    classifier = Bi_Deco(nr_points=opt.nr_points, ensemble_hidden_size=4096)
     if opt.gpu != "":
         classifier.cuda()
     print(classifier)
