@@ -41,18 +41,19 @@ import os
 import torch.optim
 import torch.utils.data
 import PIL
+import subprocess
 from torch.backends import cudnn
 from torch.autograd import Variable
 
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
 RESULTS_HOME = "/home/iodice/alessandro_results/"
 
-cudnn.benchmark = True
-cudnn.fastest = True  # it increase memory consumption
+# cudnn.benchmark = True
+# cudnn.fastest = True  # it increase memory consumption
 
 
 class Bi_Deco(torch.nn.Module):
-    def __init__(self, nr_points=2500):
+    def __init__(self, dropout_probability=0.5, nr_points=2500, ensemble_hidden_size=2048):
         WASHINGTON_CLASSES = 51
         super(Bi_Deco, self).__init__()
 
@@ -63,8 +64,17 @@ class Bi_Deco(torch.nn.Module):
                                                                               k=WASHINGTON_CLASSES)
         self.pointNet_deco = bi_deco.models.deco.DECO(is_alex_net=False, nr_points=nr_points)
 
-        # self.dropout = torch.nn.Dropout(p=dropout_probability)
-        self.ensemble = torch.nn.Linear(
+        self.dropout = torch.nn.Dropout(p=dropout_probability)
+
+        self.ensemble_fc = torch.nn.Linear(
+            self.alexNet_classifier.fc8.out_features + self.pointNet_classifier.fc3.out_features,
+            ensemble_hidden_size
+        )
+        self.ensemble_classifier = torch.nn.Linear(
+            ensemble_hidden_size,
+            WASHINGTON_CLASSES
+        )
+        self.ensemble_classifier_no_hidden = torch.nn.Linear(
             self.alexNet_classifier.fc8.out_features + self.pointNet_classifier.fc3.out_features,
             WASHINGTON_CLASSES
         )
@@ -78,12 +88,13 @@ class Bi_Deco(torch.nn.Module):
 
         h_concat = torch.cat((prediction_alexNet, prediction_pointNet), dim=1)
 
-        # h_dropout = self.dropout(h_concat)
-        prediction = self.ensemble(h_concat)
+        h_dropout = self.dropout(h_concat)
+        h_ensemble = self.ensemble_fc(h_dropout)
+        prediction = self.ensemble_classifier(h_ensemble)
         return prediction
 
 
-def main():
+def main(experiment_name):
     # TODO: https://ikhlestov.github.io/pages/machine-learning/pytorch-notes/#additional-topics
     # TODO: try out different losses
     # TODO: try out differnt pooling
@@ -92,8 +103,9 @@ def main():
     # TODO: torch.optim.lr_scheduler.ReduceLROnPlateau
 
     opt = parser_args()
-    # TODO: ensemble layer N -> 51
-    # TODO: ensemble layer N -> n2 -> 51  n2=2048, 4096
+    # TODO: ensemble layer N -> 51 [DONE, with no dropout on ensemble]
+    # TODO: ensemble layer N -> n2 -> 51  n2=2048 [DONE], 4096
+    # TODO: classify with full_branch dropout, turning off one branch at time instead of w/p 0.5
     # TODO: try more epochs
     # TODO: try pretrained DECO1, DECO2
     # TODO: test split 0, 1,2, 3, 4,cffff
@@ -108,7 +120,7 @@ def main():
         torchvision.transforms.Normalize((0.5), (0.5))
     ]
 
-    classifier = Bi_Deco(opt.nr_points)
+    classifier = Bi_Deco(nr_points=opt.nr_points, ensemble_hidden_size=2048)
     if opt.gpu != "":
         classifier.cuda()
     print(classifier)
@@ -164,16 +176,16 @@ def main():
 
         try:
             os.mkdir('state_dicts/')
-        except:
+        except OSError:
             pass
 
         try:
             os.mkdir('statistics/')
-        except:
+        except OSError:
             pass
 
-        torch.save(classifier.state_dict(), 'state_dicts/cls_model_{:d}.pth'.format(epoch))
-        with open("statistics/stats{}.pkl".format(epoch), "w") as fout:
+        torch.save(classifier.state_dict(), 'state_dicts/{}cls_model_{:d}.pth'.format(experiment_name, epoch))
+        with open("statistics/{}_stats{}.pkl".format(experiment_name, epoch), "w") as fout:
             pickle.dump((epoch_train_loss, epochs_test_loss, epochs_accuracy), fout)
 
     plt.plot(epoch_train_loss)
@@ -234,4 +246,9 @@ def get_trainable_params(model):
 
 
 if __name__ == "__main__":
-    main()
+    import time
+    timestr = time.strftime("%Y_%m_%d-%H_%M_%S")
+    print("Experiment name:", timestr)
+    cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(timestr)
+    subprocess.check_output(cmd, shell=True)
+    main(experiment_name=timestr)
