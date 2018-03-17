@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.parallel
 import torch.utils.data
+import torch.nn.functional
 from torch.nn.modules.module import _addindent
 
 
@@ -85,12 +86,21 @@ class DECO(nn.Module):
         # 8 blocchi di residual
         self.res1 = ResidualBlock(64)
         self.res2 = ResidualBlock(64)
-        self.res3 = ResidualBlock(64)
-        self.res4 = ResidualBlock(64)
-        self.res5 = ResidualBlock(64)
-        self.res6 = ResidualBlock(64)
-        self.res7 = ResidualBlock(64)
-        self.res8 = ResidualBlock(64)
+        if is_alex_net:
+            self.res3 = ResidualBlock(64)
+            self.res4 = ResidualBlock(64)
+            self.res5 = ResidualBlock(64)
+            self.res6 = ResidualBlock(64)
+            self.res7 = ResidualBlock(64)
+            self.res8 = ResidualBlock(64)
+        else:
+            # DECO medium
+            self.res3 = ResidualBlock(128)
+            self.res4 = ResidualBlock(128)
+            self.res5 = ResidualBlock(256)
+            self.res6 = ResidualBlock(256)
+            self.res7 = ResidualBlock(512)
+            self.res8 = ResidualBlock(512)
 
         # convoluzione2
         # self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
@@ -104,8 +114,8 @@ class DECO(nn.Module):
             self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
             # deconvolution-upsampling porta a 3x228x228
 
-            self.deconv_to_image = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
-            # self.deconv = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=2, groups=3, bias=False)
+            # self.deconv_to_image = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
+            self.deconv = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=2, groups=3, bias=False)
 
             if pretrained:
                 pretrained_path = "/home/deco2/python/risultati_onlyDepth_trainingonWashington/20-12-2017 23:29/weightsepoch199freezed.pkl"
@@ -117,16 +127,28 @@ class DECO(nn.Module):
                     else:
                         print("droppling", key)
                 self.load_state_dict(deco_dict)
-                for name, network_module in self.named_children():
-                    for param in network_module.parameters():
-                        param.requires_grad = False
         else:
             self.last_pool = nn.MaxPool2d(3, stride=2)
-            # TODO: dropout here
-            self.fc_to_3d_points = nn.Linear(64 * 27 * 27, self.nr_points * 3)
+            # self.fc_to_3d_points = nn.Linear(64 * 27 * 27, self.nr_points * 3)
+            self.fc1 = nn.Linear(64 * 27 * 27, 4096)
+            self.fc2 = nn.Linear(4096, self.nr_points * 3)
             if pretrained:
                 pretrained_path = "/home/alessandrodm/tesi/weights/split0/freezed/fc4096/epoch119DECO_medium_convNesterovfreezed.pkl"
-                self.load_state_dict(torch.load(pretrained_path))
+                # self.load_state_dict(torch.load(pretrained_path))
+                pretrained_dict = torch.load(pretrained_path)
+                deco_dict = {}
+                for key in pretrained_dict:
+                    if not key.startswith("feat."):
+                        new_key = key.replace("rb", "res")
+                        deco_dict[new_key] = pretrained_dict[key]
+                    else:
+                        print("droppling", key)
+                self.load_state_dict(deco_dict)
+
+        if pretrained:
+            for name, network_module in self.named_children():
+                for param in network_module.parameters():
+                    param.requires_grad = False
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -160,12 +182,15 @@ class DECO(nn.Module):
         if self.is_alex_net:
             x = self.conv2(x)
             # print("x = self.conv2(x)", x.size())
-            # x = self.deconv(x)
-            x = self.deconv_to_image(x)
+            # x = self.deconv_to_image(x)
+            x = self.deconv(x)
         else:
             x = self.last_pool(x)
             x = x.view(batch_size, -1)
-            # batch_size, dim1 = x.size()
-            x = self.fc_to_3d_points(x)
-            x = x.view(batch_size, 3, self.nr_points)
+            # x = self.fc_to_3d_points(x)
+            # x = x.view(batch_size, 3, self.nr_points)
+            x = x.view(x.size(0), self.n_size)
+            x = torch.nn.functional.relu(self.fc1(x))
+            x = self.fc2(x)
+            x = x.view(x.size(0), 3, 2500)
         return x

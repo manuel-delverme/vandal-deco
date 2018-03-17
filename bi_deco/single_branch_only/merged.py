@@ -9,6 +9,7 @@ def parser_args():
     parser.add_argument('--nr_points', type=int, default=2500, help='input batch size')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
+    parser.add_argument('--record_experiment', type=bool, default=False, help='if true; archive code as tar')
     parser.add_argument('--size', type=int, default=224, help='fml')
     parser.add_argument('--crop_size', type=int, default=224, help='fml')
     parser.add_argument('--gpu', type=str, default="2", help='gpu bus id')
@@ -58,11 +59,11 @@ class Bi_Deco(torch.nn.Module):
         super(Bi_Deco, self).__init__()
 
         self.alexNet_classifier = bi_deco.models.AlexNet(num_classes=WASHINGTON_CLASSES, pretrained=True, )
-        self.alexNet_deco = bi_deco.models.deco.DECO(is_alex_net=True, nr_points=nr_points)
+        self.alexNet_deco = bi_deco.models.deco.DECO(is_alex_net=True, nr_points=nr_points, pretrained=True)
 
         self.pointNet_classifier = bi_deco.models.pointnet.PointNetClassifier(num_points=nr_points, pretrained=True,
                                                                               k=WASHINGTON_CLASSES)
-        self.pointNet_deco = bi_deco.models.deco.DECO(is_alex_net=False, nr_points=nr_points)
+        self.pointNet_deco = bi_deco.models.deco.DECO(is_alex_net=False, nr_points=nr_points, pretrained=True)
 
         self.dropout = torch.nn.Dropout(p=dropout_probability)
 
@@ -104,7 +105,7 @@ def main(experiment_name):
 
     opt = parser_args()
     # TODO: ensemble layer N -> 51 [DONE, with no dropout on ensemble]
-    # TODO: ensemble layer N -> n2 -> 51  n2=2048 [DONE], 4096
+    # TODO: ensemble layer N -> n2 -> 51  n2=2048 [DONE], 4096 [DONE]
     # TODO: classify with full_branch dropout, turning off one branch at time instead of w/p 0.5
     # TODO: try more epochs
     # TODO: try pretrained DECO1, DECO2
@@ -120,7 +121,7 @@ def main(experiment_name):
         torchvision.transforms.Normalize((0.5), (0.5))
     ]
 
-    classifier = Bi_Deco(nr_points=opt.nr_points, ensemble_hidden_size=4096)
+    classifier = Bi_Deco(nr_points=opt.nr_points, ensemble_hidden_size=2048)
     if opt.gpu != "":
         classifier.cuda()
     print(classifier)
@@ -249,6 +250,8 @@ if __name__ == "__main__":
     import time
     timestr = time.strftime("%Y_%m_%d-%H_%M_%S")
     print("Experiment name:", timestr)
-    cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(timestr)
-    subprocess.check_output(cmd, shell=True)
+    if opt.record_experiment:
+        print("archived")
+        cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(timestr)
+        subprocess.check_output(cmd, shell=True)
     main(experiment_name=timestr)
