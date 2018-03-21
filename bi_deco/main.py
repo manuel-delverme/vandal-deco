@@ -13,11 +13,12 @@ def parser_args():
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
     parser.add_argument('--size', type=int, default=224, help='fml')
-    parser.add_argument('--ensemble_size', type=int, default=2048)
+    parser.add_argument('--ensemble_hidden_size', type=int, default=2048)
     parser.add_argument('--crop_size', type=int, default=224, help='fml')
-    parser.add_argument('--gpu', type=str, default="2", help='gpu bus id')
+    parser.add_argument('--gpu', type=str, default="-1", help='gpu bus id')
     parser.add_argument('--batch_norm2d', action='store_true')
     parser.add_argument('--bound_pointnet_deco', action='store_true')
+    parser.add_argument('--record_pcls', action='store_true')
     parser.add_argument('--split', type=str, default="5", help='dataset split to test on')
     parser.add_argument('--use_adam', action='store_true')
     parser.add_argument('--decimate_lr', action='store_true')
@@ -61,17 +62,19 @@ RESULTS_HOME = "/home/iodice/alessandro_results/"
 def main(experiment_name):
     opt = parser_args()
 
-    ensemble_hidden_size = opt.ensemble_hidden_size
     classifier = models.bi_deco.Bi_Deco(
-        nr_points=opt.nr_points, ensemble_hidden_size=ensemble_hidden_size, batch_norm2d=opt.batch,
-        bound_pointnet_deco=opt.bound_pointenet_deco,
+        nr_points=opt.nr_points,
+        ensemble_hidden_size=opt.ensemble_hidden_size,
+        batch_norm2d=opt.batch_norm2d,
+        bound_pointnet_deco=opt.bound_pointnet_deco,
+        record_pcls=opt.record_pcls,
     )
-    if opt.gpu != "":
+    if opt.gpu != "-1":
         classifier.cuda()
-    print(classifier)
+    # print(classifier)
 
     train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
-        data_dir='/home/alessandrodm/tesi/dataset/',
+        data_dir='/scratch/dataset/',
         split=opt.split,
         batch_size=opt.batch_size
     )
@@ -100,9 +103,8 @@ def main(experiment_name):
             progress_bar.update(1)
             labels = target_Variable.copy_(labels)
             inputs, labels = Variable(inputs), Variable(labels)
-            if opt.gpu != "":
+            if opt.gpu != "-1":
                 inputs, labels = inputs.cuda(), labels.cuda()
-            # inputs = torch.cat([inputs, inputs, inputs], 1)
 
             class_pred = classifier(inputs)
             class_loss = crossEntropyLoss(class_pred, labels)
@@ -145,23 +147,13 @@ def main(experiment_name):
         with open("statistics/{}_stats{}.pkl".format(experiment_name, epoch), "w") as fout:
             pickle.dump((epoch_train_loss, epochs_test_loss, epochs_accuracy), fout)
 
-    # plt.plot(epoch_train_loss)
-    # plt.plot(epochs_test_loss)
-    # plt.plot(epochs_accuracy)
-    # plt.savefig("plots/metrics.png")
-
 
 def test(CrossEntropyLoss, classifier, opt, test_loader):
     classifier.eval()
     correct = 0.0
     test_loss = 0.0
     total = 0.0
-    counter = 0.0
 
-    # test_samples = 0
-    # test_losses = []
-    # test_accuracies = []
-    # freqs = {i: 0 for i in range(51)}
     progress_bar = tqdm.tqdm(total=len(test_loader))
     target_Variable = torch.LongTensor(opt.batch_size)
 
@@ -170,24 +162,16 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
         progress_bar.update(1)
         if opt.gpu != "":
             inputs, labels = inputs.cuda(), labels.cuda()
-
-        # labels = target_Variable.copy_(labels)
         inputs, labels = Variable(inputs, volatile=True), Variable(labels, volatile=True)
-        # inputs = torch.cat([inputs, inputs, inputs], 1)
 
         class_pred = classifier(inputs)
         class_loss = CrossEntropyLoss(class_pred, labels)
         _, predicted = torch.max(class_pred.data, 1)
         total += labels.size(0)
         correct += predicted.eq(labels.data).cpu().sum()
-        # for yi_pred, yi_target in zip(predicted, labels.data.cpu()):
-        #     freqs[yi_pred] += 1
-
-        # accuracy = pred_choice.eq(y_target.data).cpu().sum()
         test_loss += class_loss.data[0]
-        # test_accuracies.append(corrects / float(len(predicted)))
         progress_bar.set_description("accuracy {}".format(correct / total))
-    # print("frequencies:".format({k: v for k, v in freqs.items() if v > 0}))
+
     progress_bar.close()
     return correct / total, test_loss / total
 

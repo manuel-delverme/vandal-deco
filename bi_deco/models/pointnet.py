@@ -94,7 +94,10 @@ class PointNetClassifier(nn.Module):
         self.bn2 = nn.BatchNorm1d(256)
         self.relu = nn.ReLU()
         if pretrained:
-            self.load_state_dict(torch.load("/home/alessandrodm/pointnet_weights/cls/cls_model_24.pth"))
+            pointnet_dict = torch.load("/home/alessandrodm/pointnet_weights/cls/cls_model_24.pth",
+                                       map_location=lambda storage, loc: storage)
+
+            self.load_state_dict(pointnet_dict)
             for name, network_module in self.named_children():
                 for param in network_module.parameters():
                     param.requires_grad = False

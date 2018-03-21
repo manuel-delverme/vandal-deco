@@ -10,9 +10,11 @@ import deco
 
 class Bi_Deco(torch.nn.Module):
     def __init__(self, dropout_probability=0.5, nr_points=2500, ensemble_hidden_size=2048, batch_norm2d=False,
-                 bound_pointnet_deco=False):
+                 bound_pointnet_deco=False, record_pcls=False):
         WASHINGTON_CLASSES = 51
         super(Bi_Deco, self).__init__()
+
+        self.record_pcls_file = record_pcls
 
         self.alexNet_classifier = alex_net.AlexNet(num_classes=WASHINGTON_CLASSES, pretrained=True, )
         self.alexNet_deco = deco.DECO(is_alex_net=True, nr_points=nr_points, batch_norm2d=batch_norm2d)
@@ -42,6 +44,12 @@ class Bi_Deco(torch.nn.Module):
         prediction_alexNet = self.alexNet_classifier(augmented_image)
 
         point_cloud = self.pointNet_deco(x)
+
+        if self.record_pcls_file:
+            cloud = point_cloud.tolist()
+            with open(self.record_pcls_file, "ab") as fout:
+                fout.write(",".join(cloud))
+
         prediction_pointNet = self.pointNet_classifier(point_cloud)
 
         h_concat = torch.cat((prediction_alexNet, prediction_pointNet), dim=1)
@@ -50,6 +58,5 @@ class Bi_Deco(torch.nn.Module):
         h_ensemble = self.ensemble_fc(h_dropout)
         prediction = self.ensemble_classifier(h_ensemble)
         return prediction
-
 
 

@@ -105,5 +105,5 @@ class DECO(nn.Module):
             h = self.fc_to_3d_points(h)
             h = h.view(batch_size, 3, self.nr_points)
         if self.bound_output:
-            y = self.output_bound(h)
-        return y
+            h = self.output_bound(h)
+        return h
