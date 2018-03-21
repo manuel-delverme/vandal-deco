@@ -1,11 +1,9 @@
 from __future__ import print_function
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.parallel
 import torch.utils.data
-from torch.nn.modules.module import _addindent
 
 
 class ResidualBlock(nn.Module):
@@ -33,27 +31,22 @@ class ResidualBlock(nn.Module):
         return out
 
 
-def conv3x3(in_planes, out_planes, stride=1):
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
-
-
 class DECO(nn.Module):
-    def __init__(self, is_alex_net, nr_points, pretrained=False):
+    def __init__(self, is_alex_net, nr_points, pretrained=False, batch_norm2d=False, bound_output=False):
         super(DECO, self).__init__()
         self.nr_points = nr_points
         self.is_alex_net = is_alex_net
-        # 1 input image channel, 6 output channels, 5x5 square convolution
-        # kernel
-        # convoluzione1
-        self.conv1 = nn.Conv2d(1, 64, 7, stride=2, padding=3)
-        # BN e Leacky ReLU
+        self.bound_output = bound_output
 
-        # TODO: check for BatchNorm2D
-        self.bn1 = nn.BatchNorm1d(64)
+        self.conv1 = nn.Conv2d(1, 64, 7, stride=2, padding=3)
+
+        if batch_norm2d:
+            self.bn1 = nn.BatchNorm2d(64)
+        else:
+            self.bn1 = nn.BatchNorm1d(64)
+
         self.Lrelu = nn.LeakyReLU(negative_slope=0.01)
-        # maxPooling
         self.pool = nn.MaxPool2d(3, stride=2)  # 64x57x57
-        # 8 blocchi di residual
         self.res1 = ResidualBlock(64)
         self.res2 = ResidualBlock(64)
         self.res3 = ResidualBlock(64)
@@ -63,80 +56,54 @@ class DECO(nn.Module):
         self.res7 = ResidualBlock(64)
         self.res8 = ResidualBlock(64)
 
-        # convoluzione2
-        # self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
-
-        # deconvolution-upsampling porta a 3x228x228
-
-        # TODO: we changed padding from 3 to 0
-        # self.deconv = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
         if is_alex_net:
-            # convoluzione2
             self.conv2 = nn.Conv2d(64, 3, 1, stride=1)  # 1 canale, 3 kernels,
-            # deconvolution-upsampling porta a 3x228x228
-
             self.deconv_to_image = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=0, groups=3, bias=False)
-            # self.deconv = nn.ConvTranspose2d(3, 3, 8, stride=4, padding=2, groups=3, bias=False)
 
             if pretrained:
-                pretrained_path = "/home/deco2/python/risultati_onlyDepth_trainingonWashington/20-12-2017 23:29/weightsepoch199freezed.pkl"
-                pretrained_dict = torch.load(pretrained_path)
-                deco_dict = {}
-                for key in pretrained_dict:
-                    if key.startswith("Deco."):
-                        deco_dict[key[5:]] = pretrained_dict[key]
-                    else:
-                        print("droppling", key)
-                self.load_state_dict(deco_dict)
+                pretrained_dict = torch.load(pretrained)
+                self.load_state_dict(pretrained_dict)
                 for name, network_module in self.named_children():
                     for param in network_module.parameters():
                         param.requires_grad = False
+            if bound_output:
+                self.output_bound = nn.Sigmoid()
         else:
             self.last_pool = nn.MaxPool2d(3, stride=2)
-            # TODO: dropout here
             self.fc_to_3d_points = nn.Linear(64 * 27 * 27, self.nr_points * 3)
             if pretrained:
-                pretrained_path = "/home/alessandrodm/tesi/weights/split0/freezed/fc4096/epoch119DECO_medium_convNesterovfreezed.pkl"
-                self.load_state_dict(torch.load(pretrained_path))
+                pretrained_dict = torch.load(pretrained)
+                self.load_state_dict(pretrained_dict)
+                for name, network_module in self.named_children():
+                    for param in network_module.parameters():
+                        param.requires_grad = False
+            if bound_output:
+                self.output_bound = nn.Tanh()
 
     def forward(self, x):
         batch_size = x.size(0)
         x = x.view(batch_size, 1, 224, 224)
-        # print("x = x.view(x.size(0), 1, 224, 224)", x.size())
-        x = self.conv1(x)
-        # print("x = self.conv1(x)", x.size())
-        x = self.bn1(x)
-        # print("x = self.bn1(x)", x.size())
-        x = self.Lrelu(x)
-        # print("x = self.Lrelu(x)", x.size())
-        x = self.pool(x)
-        # print("x = self.pool(x)", x.size())
-        x = self.res1(x)
-        # print("x = self.res1(x)", x.size())
-        x = self.res2(x)
-        # print("x = self.res2(x)", x.size())
-        x = self.res3(x)
-        # print("x = self.res3(x)", x.size())
-        x = self.res4(x)
-        # print("x = self.res4(x)", x.size())
-        x = self.res5(x)
-        # print("x = self.res5(x)", x.size())
-        x = self.res6(x)
-        # print("x = self.res6(x)", x.size())
-        x = self.res7(x)
-        # print("x = self.res7(x)", x.size())
-        x = self.res8(x)
-        # print("x = self.res8(x)", x.size())
+        h = self.conv1(x)
+        h = self.bn1(h)
+        h = self.Lrelu(h)
+        h = self.pool(h)
+        h = self.res1(h)
+        h = self.res2(h)
+        h = self.res3(h)
+        h = self.res4(h)
+        h = self.res5(h)
+        h = self.res6(h)
+        h = self.res7(h)
+        h = self.res8(h)
 
         if self.is_alex_net:
-            x = self.conv2(x)
-            # print("x = self.conv2(x)", x.size())
-            # x = self.deconv(x)
-            x = self.deconv_to_image(x)
+            h = self.conv2(h)
+            h = self.deconv_to_image(h)
         else:
-            x = self.last_pool(x)
-            x = x.view(batch_size, -1)
-            # batch_size, dim1 = x.size()
-            x = self.fc_to_3d_points(x)
-            x = x.view(batch_size, 3, self.nr_points)
-        return x
+            h = self.last_pool(h)
+            h = h.view(batch_size, -1)
+            h = self.fc_to_3d_points(h)
+            h = h.view(batch_size, 3, self.nr_points)
+        if self.bound_output:
+            y = self.output_bound(h)
+        return y

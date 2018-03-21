@@ -3,6 +3,7 @@ from __future__ import print_function
 import argparse
 
 import os
+import utils
 
 
 def parser_args():
@@ -12,10 +13,14 @@ def parser_args():
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
     parser.add_argument('--size', type=int, default=224, help='fml')
+    parser.add_argument('--ensemble_size', type=int, default=2048)
     parser.add_argument('--crop_size', type=int, default=224, help='fml')
     parser.add_argument('--gpu', type=str, default="2", help='gpu bus id')
+    parser.add_argument('--batch_norm2d', action='store_true')
+    parser.add_argument('--bound_pointnet_deco', action='store_true')
     parser.add_argument('--split', type=str, default="5", help='dataset split to test on')
     parser.add_argument('--use_adam', action='store_true')
+    parser.add_argument('--decimate_lr', action='store_true')
     parser.add_argument('--record_experiment', action='store_true')
     parser.add_argument("-q", action="store_false", dest="verbose")
 
@@ -46,6 +51,7 @@ import os
 import torch.optim
 import torch.utils.data
 import subprocess
+import models.bi_deco
 from torch.autograd import Variable
 
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
@@ -55,7 +61,11 @@ RESULTS_HOME = "/home/iodice/alessandro_results/"
 def main(experiment_name):
     opt = parser_args()
 
-    classifier = Bi_Deco(nr_points=opt.nr_points, ensemble_hidden_size=2048)
+    ensemble_hidden_size = opt.ensemble_hidden_size
+    classifier = models.bi_deco.Bi_Deco(
+        nr_points=opt.nr_points, ensemble_hidden_size=ensemble_hidden_size, batch_norm2d=opt.batch,
+        bound_pointnet_deco=opt.bound_pointenet_deco,
+    )
     if opt.gpu != "":
         classifier.cuda()
     print(classifier)
@@ -67,11 +77,10 @@ def main(experiment_name):
     )
 
     crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
-    # optimizer = torch.optim.SGD(get_trainable_params(model), lr=0.007, momentum=0.9, nesterov=True)
     if opt.use_adam:
-        class_optimizer = torch.optim.Adam(get_trainable_params(classifier), lr=3e-4)
+        class_optimizer = torch.optim.Adam(utils.get_trainable_params(classifier), lr=3e-4)
     else:
-        class_optimizer = torch.optim.SGD(get_trainable_params(classifier), lr=0.007, momentum=0.9, nesterov=True)
+        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=0.007, momentum=0.9, nesterov=True)
 
     target_Variable = torch.LongTensor(opt.batch_size)
 
@@ -79,6 +88,9 @@ def main(experiment_name):
     epochs_test_loss = []
     epochs_accuracy = []
     for epoch in range(opt.nepoch):
+        if opt.decimate_lr and epoch == 40:
+            class_optimizer.param_groups[0]['lr'] = opt.lr / 10
+
         print("EPOCH {}/{} ".format(epoch, opt.nepoch))
         classifier.train()
         epoch_losses = collections.deque(maxlen=100)
@@ -178,16 +190,6 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
     # print("frequencies:".format({k: v for k, v in freqs.items() if v > 0}))
     progress_bar.close()
     return correct / total, test_loss / total
-
-
-def get_trainable_params(model):
-    params = []
-    print("training parameters:")
-    for name, p in model.named_parameters():
-        if p.requires_grad:
-            print(name)
-            params.append(p)
-    return params
 
 
 if __name__ == "__main__":
