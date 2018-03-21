@@ -8,20 +8,18 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # is this even working maybe it has to be declared earlier
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # CPU
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.parallel
 import torch.utils.data
-import models.alex_net
+import bi_deco.models.alex_net
 import pickle
 import collections
 import numpy as np
 import matplotlib.pyplot as plt
-import models.pointnet
-import models.deco_old
-import models.bi_deco
-import datasets.washington
+import bi_deco.models.pointnet
+import bi_deco.models.bi_deco
+import bi_deco.datasets.washington
 import torch
 import torch.nn.parallel
 import torch.utils.data
@@ -32,11 +30,8 @@ import torch.utils.data
 import torch.nn
 from torch.autograd import Variable
 
-# RESOURCES_HOME = "/home/iodice/vandal-deco/progetto-alessandro/tesi/tesi/"
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
 RESULTS_HOME = "/home/iodice/alessandro_results/"
-CLASSIFIER_WEIGHTS = '/home/alessandrodm/tesi/pointnet_weights/cls/cls_model_24.pth'
-BLUEIZE = lambda x: '\033[94m' + x + '\033[0m'
 
 
 class Alexnet_only(nn.Module):
@@ -44,7 +39,7 @@ class Alexnet_only(nn.Module):
         WASHINGTON_CLASSES = 51
         super(Alexnet_only, self).__init__()
 
-        self.alexNet_classifier = models.alex_net.alexnet(pretrained=True)
+        self.alexNet_classifier = bi_deco.models.alex_net.alexnet(pretrained=True)
         self.ensemble = torch.nn.Linear(
             self.alexNet_classifier.classifier[6].out_features,
             WASHINGTON_CLASSES
@@ -95,8 +90,8 @@ def load_data(opt):
         os.makedirs(root_data)
         print("storing data in ", root_data)
     Batch_size = 24
-    test_dataset = datasets.washington.WASHINGTON_Dataset(data_dir=RESOURCES_HOME + '/dataset/' + split + '/val_db',
-                                                          train=False)
+    test_dataset = bi_deco.datasets.washington.WASHINGTON_Dataset(data_dir=RESOURCES_HOME + '/dataset/' + split + '/val_db',
+                                                                  train=False)
     testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=Batch_size, shuffle=False, num_workers=1)
     return testdataloader
 
@@ -108,7 +103,7 @@ def main():
     if opt.gpu != "":
         model.cuda()
     print(model)
-    train_loader, test_loader = datasets.washington.load_dataset(
+    train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
         data_dir='/home/alessandrodm/tesi/dataset/', split="5", batch_size=opt.batchSize, rgb=True)
 
     params = [p for p in model.parameters() if p.requires_grad]
