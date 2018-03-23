@@ -3,20 +3,25 @@ from __future__ import print_function
 import argparse
 
 import os
+
+import tf_logger
 import utils
 
 
 def parser_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=16, help='input batch size')
-    parser.add_argument('--nr_points', type=int, default=2500, help='input batch size')
+    parser.add_argument('--batch_size', type=int, default=32, help='input batch size')
+    parser.add_argument('--nr_points', type=int, default=2500, help='')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
     parser.add_argument('--size', type=int, default=224, help='fml')
     parser.add_argument('--ensemble_hidden_size', type=int, default=2048)
     parser.add_argument('--crop_size', type=int, default=224, help='fml')
     parser.add_argument('--gpu', type=str, default="-1", help='gpu bus id')
+    parser.add_argument('--experiment_name', type=str, default="")
     parser.add_argument('--batch_norm2d', action='store_true')
+    parser.add_argument('--branch_dropout', action='store_true')
+    parser.add_argument('--skip_training', action='store_true')
     parser.add_argument('--bound_pointnet_deco', action='store_true')
     parser.add_argument('--record_pcls', action='store_true')
     parser.add_argument('--split', type=str, default="5", help='dataset split to test on')
@@ -31,8 +36,6 @@ def parser_args():
 
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# is this even working maybe it has to be declared earlier
-# os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # CPU
 opt = parser_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
 
@@ -41,9 +44,6 @@ import tqdm
 import torch.nn
 import torch.nn.parallel
 import torch.utils.data
-import pickle
-import collections
-import numpy as np
 import bi_deco.models
 import bi_deco.datasets.washington
 import torch.nn.parallel
@@ -53,14 +53,15 @@ import torch.optim
 import torch.utils.data
 import subprocess
 import models.bi_deco
+import glob
 from torch.autograd import Variable
 
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
 RESULTS_HOME = "/home/iodice/alessandro_results/"
 
 
-def main(experiment_name):
-    opt = parser_args()
+def train_bideco(experiment_name, resume_experiment=False):
+    print("loading classifier")
 
     classifier = models.bi_deco.Bi_Deco(
         nr_points=opt.nr_points,
@@ -68,10 +69,17 @@ def main(experiment_name):
         batch_norm2d=opt.batch_norm2d,
         bound_pointnet_deco=opt.bound_pointnet_deco,
         record_pcls=opt.record_pcls,
+        branch_dropout=opt.branch_dropout,
     )
+
+    experiment_epoch = -1
+    if resume_experiment:
+        checkpoint_path, experiment_epoch = latest_checkpoint_path(experiment_name)
+        classifier.load_state_dict(torch.load(checkpoint_path))
+
     if opt.gpu != "-1":
+        print("loading classifier in GPU")
         classifier.cuda()
-    # print(classifier)
 
     train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
         data_dir='/scratch/dataset/',
@@ -79,73 +87,80 @@ def main(experiment_name):
         batch_size=opt.batch_size
     )
 
+    print("loss and optimizer")
     crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
+    if experiment_epoch > 40 and opt.decimate_lr:
+        learning_rate = 0.007
+    else:
+        learning_rate = 0.07
+
     if opt.use_adam:
         class_optimizer = torch.optim.Adam(utils.get_trainable_params(classifier), lr=3e-4)
     else:
-        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=0.007, momentum=0.9, nesterov=True)
+        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=learning_rate, momentum=0.9, nesterov=True)
 
-    target_Variable = torch.LongTensor(opt.batch_size)
-
-    epoch_train_loss = []
-    epochs_test_loss = []
-    epochs_accuracy = []
-    for epoch in range(opt.nepoch):
+    logger = tf_logger.Logger("tf_log/{}".format(experiment_name))
+    for epoch in range(experiment_epoch + 1, opt.nepoch):
         if opt.decimate_lr and epoch == 40:
-            class_optimizer.param_groups[0]['lr'] = opt.lr / 10
+            class_optimizer.param_groups[0]['lr'] = learning_rate / 10
 
-        print("EPOCH {}/{} ".format(epoch, opt.nepoch))
         classifier.train()
-        epoch_losses = collections.deque(maxlen=100)
-        progress_bar = tqdm.tqdm(total=len(train_loader))
+        progress_bar = tqdm.tqdm(total=len(train_loader) * (50 - experiment_epoch - 1))
 
         for step, (inputs, labels) in enumerate(train_loader, 0):
+            if opt.skip_training and step > 5:
+                break
             progress_bar.update(1)
-            labels = target_Variable.copy_(labels)
-            inputs, labels = Variable(inputs), Variable(labels)
-            if opt.gpu != "-1":
-                inputs, labels = inputs.cuda(), labels.cuda()
-
-            class_pred = classifier(inputs)
-            class_loss = crossEntropyLoss(class_pred, labels)
-
-            class_optimizer.zero_grad()
-            class_loss.backward()
-            class_optimizer.step()
-
-            loss_ = class_loss.data[0]
-
-            epoch_losses.append(loss_)
-            progress_bar.set_description("avg {}".format(np.round(np.mean(epoch_losses), 2)))
+            train_step(class_optimizer, classifier, crossEntropyLoss, epoch, logger, step, inputs, labels)
+            progress_bar.set_description("epoch {} lr {}".format(epoch, class_optimizer.param_groups[0]['lr']))
 
         del inputs
         del labels
-        del class_loss
-        torch.cuda.empty_cache()
-        epoch_train_loss.append(sum(epoch_losses) / len(epoch_losses))
-
         test_accuracy, test_loss = test(crossEntropyLoss, classifier, opt, test_loader)
-        torch.cuda.empty_cache()
-        epochs_test_loss.append(test_loss)
-        epochs_accuracy.append(test_accuracy)
 
-        print("acc")
-        print("acc", epochs_accuracy)
-        print("loss", epochs_test_loss)
+        logger.scalar_summary("loss/test_loss", test_loss, step + opt.nepoch * epoch)
+        logger.scalar_summary("loss/test_accuracy", test_accuracy, step + opt.nepoch * epoch)
 
-        try:
-            os.mkdir('state_dicts/')
-        except OSError:
-            pass
+        if not opt.skip_training:
+            try:
+                os.mkdir('state_dicts/')
+            except OSError:
+                pass
+            torch.save(classifier.state_dict(), 'state_dicts/{}cls_model_{:d}.pth'.format(experiment_name, epoch))
 
-        try:
-            os.mkdir('statistics/')
-        except OSError:
-            pass
 
-        torch.save(classifier.state_dict(), 'state_dicts/{}cls_model_{:d}.pth'.format(experiment_name, epoch))
-        with open("statistics/{}_stats{}.pkl".format(experiment_name, epoch), "w") as fout:
-            pickle.dump((epoch_train_loss, epochs_test_loss, epochs_accuracy), fout)
+def train_step(class_optimizer, classifier, crossEntropyLoss, epoch, logger, step, inputs, labels):
+    target_Variable = torch.LongTensor(opt.batch_size)
+    labels = target_Variable.copy_(labels)
+
+    inputs, labels = Variable(inputs), Variable(labels)
+    if opt.gpu != "-1":
+        inputs, labels = inputs.cuda(), labels.cuda()
+    class_pred = classifier(inputs)
+    class_loss = crossEntropyLoss(class_pred, labels)
+    del inputs
+    del labels
+    del class_pred
+    class_optimizer.zero_grad()
+    class_loss.backward()
+    class_optimizer.step()
+    loss_ = class_loss.data[0]
+    del class_loss
+    logger.scalar_summary("loss/train_loss", loss_, step + opt.nepoch * epoch)
+
+
+def latest_checkpoint_path(experiment_name):
+    experiment_epoch = -1
+    for checkpoint_path in glob.glob("/home/iodice/vandal-deco/state_dicts/{}cls_model_*.pth".format(experiment_name)):
+        f, t = checkpoint_path.rfind("_") + 1, -4
+        assert (f > 0)
+        checkpoint_epoch = checkpoint_path[f:t]
+        experiment_epoch = max(int(checkpoint_epoch), experiment_epoch)
+    if experiment_epoch == -1:
+        raise Exception("checkpoint {} not found".format(experiment_name))
+    checkpoint_path = "/home/iodice/vandal-deco/state_dicts/{}cls_model_{}.pth".format(experiment_name,
+                                                                                       experiment_epoch)
+    return checkpoint_path, experiment_epoch
 
 
 def test(CrossEntropyLoss, classifier, opt, test_loader):
@@ -158,6 +173,8 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
     target_Variable = torch.LongTensor(opt.batch_size)
 
     for test_step, (inputs, labels) in enumerate(test_loader):
+        if opt.skip_training and test_step > 5:
+            break
         labels = target_Variable.copy_(labels)
         progress_bar.update(1)
         if opt.gpu != "":
@@ -176,12 +193,22 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
     return correct / total, test_loss / total
 
 
+def main():
+    print(opt)
+
+    if opt.experiment_name != "":
+        train_bideco(experiment_name=opt.experiment_name, resume_experiment=True)
+    else:
+        import time
+        experiment_name = time.strftime("%Y_%m_%d-%H_%M_%S")
+        print("Experiment name:", experiment_name)
+        if opt.record_experiment:
+            print("archived")
+            cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(
+                experiment_name)
+            subprocess.check_output(cmd, shell=True)
+        train_bideco(experiment_name=experiment_name)
+
+
 if __name__ == "__main__":
-    import time
-    timestr = time.strftime("%Y_%m_%d-%H_%M_%S")
-    print("Experiment name:", timestr)
-    if opt.record_experiment:
-        print("archived")
-        cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(timestr)
-        subprocess.check_output(cmd, shell=True)
-    main(experiment_name=timestr)
+    main()

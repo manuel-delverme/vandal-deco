@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.parallel
 import torch.utils.data
 
@@ -41,9 +42,11 @@ class DECO(nn.Module):
         self.conv1 = nn.Conv2d(1, 64, 7, stride=2, padding=3)
 
         if batch_norm2d:
-            self.bn1 = nn.BatchNorm2d(64)
+            batch_norm_fn = nn.BatchNorm2d
         else:
-            self.bn1 = nn.BatchNorm1d(64)
+            batch_norm_fn = nn.BatchNorm1d
+
+        self.bn1 = batch_norm_fn(64)
 
         self.Lrelu = nn.LeakyReLU(negative_slope=0.01)
         self.pool = nn.MaxPool2d(3, stride=2)  # 64x57x57
@@ -69,8 +72,30 @@ class DECO(nn.Module):
             if bound_output:
                 self.output_bound = nn.Sigmoid()
         else:
+            self.bn2 = batch_norm_fn(64)
             self.last_pool = nn.MaxPool2d(3, stride=2)
-            self.fc_to_3d_points = nn.Linear(64 * 27 * 27, self.nr_points * 3)
+
+            self.parameter_killer1 = nn.Sequential(
+                nn.Conv2d(64, 128, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                batch_norm_fn(128),
+                nn.MaxPool2d(kernel_size=3, stride=2),
+            )
+            self.parameter_killer2 = nn.Sequential(
+                nn.Conv2d(128, 256, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                batch_norm_fn(256),
+                nn.MaxPool2d(kernel_size=3, stride=2),
+            )
+            self.parameter_killer3 = nn.Sequential(
+                nn.Conv2d(256, 512, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                batch_norm_fn(512),
+                nn.MaxPool2d(kernel_size=3, stride=2),
+            )
+
+            # self.fc1 = nn.Linear(64 * 27 * 27, 4096)
+            self.fc_to_3d_points = nn.Linear(512 * 6 * 6, self.nr_points * 3)
             if pretrained:
                 pretrained_dict = torch.load(pretrained)
                 self.load_state_dict(pretrained_dict)
@@ -100,10 +125,18 @@ class DECO(nn.Module):
             h = self.conv2(h)
             h = self.deconv_to_image(h)
         else:
-            h = self.last_pool(h)
+            h = self.parameter_killer1(h)
+            h = self.parameter_killer2(h)
+            h = self.parameter_killer3(h)
+
+            # h = self.last_pool(h)
             h = h.view(batch_size, -1)
+
+            # h = F.relu(self.fc1(h))
             h = self.fc_to_3d_points(h)
+            # h = F.log_softmax(h)
             h = h.view(batch_size, 3, self.nr_points)
+
         if self.bound_output:
             h = self.output_bound(h)
         return h
