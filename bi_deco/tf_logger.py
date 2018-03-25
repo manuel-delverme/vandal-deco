@@ -20,6 +20,7 @@ class Logger(object):
         self.writer.add_summary(summary, step)
 
     def image_summary(self, tag, images, step):
+        def image_summary(self, tag, images, step):
         """Log a list of images."""
 
         img_summaries = []

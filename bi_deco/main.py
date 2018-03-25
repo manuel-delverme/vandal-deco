@@ -12,7 +12,7 @@ def parser_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch_size', type=int, default=32, help='input batch size')
     parser.add_argument('--nr_points', type=int, default=2500, help='')
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+    parser.add_argument('--workers', type=int, help='number of data loading workers', default=1)
     parser.add_argument('--nepoch', type=int, default=50, help='number of epochs to train for')
     parser.add_argument('--size', type=int, default=224, help='fml')
     parser.add_argument('--ensemble_hidden_size', type=int, default=2048)
@@ -62,6 +62,7 @@ RESULTS_HOME = "/home/iodice/alessandro_results/"
 
 def train_bideco(experiment_name, resume_experiment=False):
     print("loading classifier")
+    logger = tf_logger.Logger("tf_log/{}".format(experiment_name))
 
     classifier = models.bi_deco.Bi_Deco(
         nr_points=opt.nr_points,
@@ -70,6 +71,7 @@ def train_bideco(experiment_name, resume_experiment=False):
         bound_pointnet_deco=opt.bound_pointnet_deco,
         record_pcls=opt.record_pcls,
         branch_dropout=opt.branch_dropout,
+        logger=logger,
     )
 
     experiment_epoch = -1
@@ -90,19 +92,19 @@ def train_bideco(experiment_name, resume_experiment=False):
     print("loss and optimizer")
     crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
     if experiment_epoch > 40 and opt.decimate_lr:
-        learning_rate = 0.007
+        learning_rate = 0.0007
     else:
-        learning_rate = 0.07
+        learning_rate = 0.007
 
     if opt.use_adam:
         class_optimizer = torch.optim.Adam(utils.get_trainable_params(classifier), lr=3e-4)
     else:
         class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=learning_rate, momentum=0.9, nesterov=True)
 
-    logger = tf_logger.Logger("tf_log/{}".format(experiment_name))
+    last_test_accuracy = -1
     for epoch in range(experiment_epoch + 1, opt.nepoch):
         if opt.decimate_lr and epoch == 40:
-            class_optimizer.param_groups[0]['lr'] = learning_rate / 10
+            class_optimizer.param_groups[0]['lr'] = learning_rate / 10.
 
         classifier.train()
         progress_bar = tqdm.tqdm(total=len(train_loader) * (50 - experiment_epoch - 1))
@@ -111,12 +113,26 @@ def train_bideco(experiment_name, resume_experiment=False):
             if opt.skip_training and step > 5:
                 break
             progress_bar.update(1)
-            train_step(class_optimizer, classifier, crossEntropyLoss, epoch, logger, step, inputs, labels)
-            progress_bar.set_description("epoch {} lr {}".format(epoch, class_optimizer.param_groups[0]['lr']))
+
+            target_Variable = torch.LongTensor(opt.batch_size)
+            labels = target_Variable.copy_(labels)
+
+            inputs, labels = Variable(inputs), Variable(labels)
+            if opt.gpu != "-1":
+                inputs, labels = inputs.cuda(), labels.cuda()
+            class_pred = classifier(inputs)
+            class_loss = crossEntropyLoss(class_pred, labels)
+            class_optimizer.zero_grad()
+            class_loss.backward()
+            class_optimizer.step()
+            loss_ = class_loss.data[0]
+            logger.scalar_summary("loss/train_loss", loss_, step + opt.nepoch * epoch)
+            progress_bar.set_description("epoch {} lr {} accuracy".format(epoch, class_optimizer.param_groups[0]['lr']), last_test_accuracy)
 
         del inputs
         del labels
         test_accuracy, test_loss = test(crossEntropyLoss, classifier, opt, test_loader)
+        last_test_accuracy = test_accuracy
 
         logger.scalar_summary("loss/test_loss", test_loss, step + opt.nepoch * epoch)
         logger.scalar_summary("loss/test_accuracy", test_accuracy, step + opt.nepoch * epoch)
@@ -127,26 +143,6 @@ def train_bideco(experiment_name, resume_experiment=False):
             except OSError:
                 pass
             torch.save(classifier.state_dict(), 'state_dicts/{}cls_model_{:d}.pth'.format(experiment_name, epoch))
-
-
-def train_step(class_optimizer, classifier, crossEntropyLoss, epoch, logger, step, inputs, labels):
-    target_Variable = torch.LongTensor(opt.batch_size)
-    labels = target_Variable.copy_(labels)
-
-    inputs, labels = Variable(inputs), Variable(labels)
-    if opt.gpu != "-1":
-        inputs, labels = inputs.cuda(), labels.cuda()
-    class_pred = classifier(inputs)
-    class_loss = crossEntropyLoss(class_pred, labels)
-    del inputs
-    del labels
-    del class_pred
-    class_optimizer.zero_grad()
-    class_loss.backward()
-    class_optimizer.step()
-    loss_ = class_loss.data[0]
-    del class_loss
-    logger.scalar_summary("loss/train_loss", loss_, step + opt.nepoch * epoch)
 
 
 def latest_checkpoint_path(experiment_name):

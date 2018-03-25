@@ -11,17 +11,19 @@ import deco
 
 
 class Bi_Deco(torch.nn.Module):
-    def __init__(self, dropout_probability=0.5, nr_points=2500, ensemble_hidden_size=2048, batch_norm2d=False,
-                 bound_pointnet_deco=False, record_pcls=False, branch_dropout=False):
+    def __init__(self, logger, dropout_probability=0.5, nr_points=2500, ensemble_hidden_size=2048, batch_norm2d=False,
+                 bound_pointnet_deco=False, record_pcls=False, record_images=False, branch_dropout=False):
         WASHINGTON_CLASSES = 51
         super(Bi_Deco, self).__init__()
+        self.logger = logger
 
-        self.record_pcls_file = record_pcls
+        self.record_pcls = record_pcls
+        self.record_images = record_images
         self.ensemble_hidden_size = ensemble_hidden_size
         self.branch_dropout = branch_dropout
 
         print("loading AlexNet")
-        self.alexNet_classifier = alex_net.AlexNet(num_classes=WASHINGTON_CLASSES, pretrained=True, )
+        self.alexNet_classifier = alex_net.AlexNet(num_outputs=4069, pretrained=True, )
         print("loading AlexNet deco")
         self.alexNet_deco = deco.DECO(is_alex_net=True, nr_points=nr_points, batch_norm2d=batch_norm2d)
 
@@ -69,10 +71,15 @@ class Bi_Deco(torch.nn.Module):
         else:
             prediction_pointNet = torch.zeros()# ???) #  TODO: fill(0)
 
-        if self.record_pcls_file:
+        if self.record_pcls:
+            raise NotImplementedError()
             cloud = point_cloud.tolist()
-            with open(self.record_pcls_file, "ab") as fout:
+            with open(self.record_pcls, "ab") as fout:
                 fout.write(",".join(cloud))
+
+        if self.record_images:
+            raise NotImplementedError()
+            self.logger.image_summary("deco_image", prediction_alexNet.tolist(), -1)
 
         h_concat = torch.cat((prediction_alexNet, prediction_pointNet), dim=1)
 

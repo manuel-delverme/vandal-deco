@@ -5,7 +5,7 @@ import torchvision.models
 
 
 class AlexNet(nn.Module):
-    def __init__(self, num_classes=1000, pretrained=True):
+    def __init__(self, num_outputs=1000, pretrained=True):
         super(AlexNet, self).__init__()
         self.alex_net = torchvision.models.alexnet(pretrained=pretrained)
         if pretrained:
@@ -14,7 +14,7 @@ class AlexNet(nn.Module):
             class_model = list(self.alex_net.classifier.children())
             class_model.pop()
             self.alex_net.classifier = nn.Sequential(*class_model)
-            self.fc8 = nn.Linear(num_features, num_classes)
+            self.fc8 = nn.Linear(num_features, num_outputs)
 
             for name, network_module in self.named_children():
                 for param in network_module.parameters():
