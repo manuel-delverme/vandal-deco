@@ -29,4 +29,6 @@ class AlexNet(nn.Module):
         return y
 
     def forward_fc7(self, x):
-        raise NotImplementedError()
+        h = self.alex_net(x)
+        return h
+

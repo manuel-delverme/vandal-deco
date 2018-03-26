@@ -37,7 +37,7 @@ class Bi_Deco(torch.nn.Module):
 
         if ensemble_hidden_size > 0:
             self.ensemble_fc = torch.nn.Linear(
-                self.alexNet_classifier.fc8.out_features + self.pointNet_classifier.fc3.out_features,
+                4096 + self.pointNet_classifier.fc2.out_features,
                 ensemble_hidden_size
             )
             self.ensemble_classifier = torch.nn.Linear(
@@ -46,7 +46,7 @@ class Bi_Deco(torch.nn.Module):
             )
         else:
             self.ensemble_classifier_no_hidden = torch.nn.Linear(
-                self.alexNet_classifier.fc8.out_features + self.pointNet_classifier.fc3.out_features,
+                4096 + self.pointNet_classifier.fc2.out_features,
                 WASHINGTON_CLASSES
             )
 
@@ -61,13 +61,13 @@ class Bi_Deco(torch.nn.Module):
 
         if use_alexnet:
             augmented_image = self.alexNet_deco(x)
-            prediction_alexNet = self.alexNet_classifier(augmented_image)
+            prediction_alexNet = self.alexNet_classifier.forward_fc7(augmented_image)
         else:
             prediction_alexNet = torch.zeros()# ???) #  TODO: fill(0)
 
         if use_pointnet:
             point_cloud = self.pointNet_deco(x)
-            prediction_pointNet = self.pointNet_classifier(point_cloud)
+            prediction_pointNet = self.pointNet_classifier.forward_fc2(point_cloud)
         else:
             prediction_pointNet = torch.zeros()# ???) #  TODO: fill(0)
 

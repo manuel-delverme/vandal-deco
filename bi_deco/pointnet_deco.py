@@ -1,9 +1,6 @@
 from __future__ import print_function
-
 import argparse
-
 import os
-
 import tf_logger
 import utils
 
@@ -32,9 +29,7 @@ def parser_args():
 
     parser.add_argument('--outf', type=str, default='cls', help='output folder')
     parser.add_argument('--model', type=str, default='', help='model path')
-    parser.add_argument('--description', type=str, default='', help='descriptive word for the experiment')
     return parser.parse_args()
-
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 opt = parser_args()
@@ -53,32 +48,38 @@ import os
 import torch.optim
 import torch.utils.data
 import subprocess
-import models.bi_deco
-import glob
+import torch.nn
 from torch.autograd import Variable
 
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
 RESULTS_HOME = "/home/iodice/alessandro_results/"
+WASHINGTON_CLASSES = 51
 
 
-def train_bideco(experiment_name, resume_experiment=False):
+class Pointnet_Deco(torch.nn.Module):
+    def __init__(self, nr_points=2500):
+        WASHINGTON_CLASSES = 51
+        super(Pointnet_Deco, self).__init__()
+
+        self.pointNet_classifier = bi_deco.models.pointnet.PointNetClassifier(
+            num_points=nr_points, pretrained=True, k=WASHINGTON_CLASSES)
+        self.pointNet_deco = bi_deco.models.deco.DECO(is_alex_net=False, nr_points=nr_points)
+
+    def forward(self, x):
+        point_cloud = self.pointNet_deco(x)
+        y_pointNet = self.pointNet_classifier(point_cloud)
+        return y_pointNet
+
+
+def train_pointnet(experiment_name, resume_experiment=False):
+    prefix = "only_pointnet"
     print("loading classifier")
-    logger = tf_logger.Logger("tf_log/{}".format(experiment_name))
-
-    classifier = models.bi_deco.Bi_Deco(
-        nr_points=opt.nr_points,
-        ensemble_hidden_size=opt.ensemble_hidden_size,
-        batch_norm2d=opt.batch_norm2d,
-        bound_pointnet_deco=opt.bound_pointnet_deco,
-        record_pcls=opt.record_pcls,
-        branch_dropout=opt.branch_dropout,
-        logger=logger,
-    )
-
+    logger = tf_logger.Logger("tf_log/{}_{}".format(prefix, experiment_name))
+    classifier = Pointnet_Deco(opt.nr_points)
     experiment_epoch = -1
+
     if resume_experiment:
-        checkpoint_path, experiment_epoch = latest_checkpoint_path(experiment_name)
-        classifier.load_state_dict(torch.load(checkpoint_path))
+        raise NotImplementedError("not implemented for pointnet")
 
     if opt.gpu != "-1":
         print("loading classifier in GPU")
@@ -100,7 +101,8 @@ def train_bideco(experiment_name, resume_experiment=False):
     if opt.use_adam:
         class_optimizer = torch.optim.Adam(utils.get_trainable_params(classifier), lr=3e-4)
     else:
-        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=learning_rate, momentum=0.9, nesterov=True)
+        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=learning_rate, momentum=0.9,
+                                          nesterov=True)
 
     last_test_accuracy = -1
     for epoch in range(experiment_epoch + 1, opt.nepoch):
@@ -128,7 +130,8 @@ def train_bideco(experiment_name, resume_experiment=False):
             class_optimizer.step()
             loss_ = class_loss.data[0]
             logger.scalar_summary("loss/train_loss", loss_, step + opt.nepoch * epoch)
-            progress_bar.set_description("epoch {} lr {} accuracy".format(epoch, class_optimizer.param_groups[0]['lr']), last_test_accuracy)
+            progress_bar.set_description("epoch {} lr {} accuracy".format(epoch, class_optimizer.param_groups[0]['lr']),
+                                         last_test_accuracy)
 
         del inputs
         del labels
@@ -143,21 +146,7 @@ def train_bideco(experiment_name, resume_experiment=False):
                 os.mkdir('state_dicts/')
             except OSError:
                 pass
-            torch.save(classifier.state_dict(), 'state_dicts/{}cls_model_{:d}.pth'.format(experiment_name, epoch))
-
-
-def latest_checkpoint_path(experiment_name):
-    experiment_epoch = -1
-    for checkpoint_path in glob.glob("/home/iodice/vandal-deco/state_dicts/{}cls_model_*.pth".format(experiment_name)):
-        f, t = checkpoint_path.rfind("_") + 1, -4
-        assert (f > 0)
-        checkpoint_epoch = checkpoint_path[f:t]
-        experiment_epoch = max(int(checkpoint_epoch), experiment_epoch)
-    if experiment_epoch == -1:
-        raise Exception("checkpoint {} not found".format(experiment_name))
-    checkpoint_path = "/home/iodice/vandal-deco/state_dicts/{}cls_model_{}.pth".format(experiment_name,
-                                                                                       experiment_epoch)
-    return checkpoint_path, experiment_epoch
+            torch.save(classifier.state_dict(), 'state_dicts/{}{}cls_model_{:d}.pth'.format(prefix, experiment_name, epoch))
 
 
 def test(CrossEntropyLoss, classifier, opt, test_loader):
@@ -194,19 +183,17 @@ def main():
     print(opt)
 
     if opt.experiment_name != "":
-        train_bideco(experiment_name=opt.experiment_name, resume_experiment=True)
+        train_pointnet(experiment_name=opt.experiment_name, resume_experiment=True)
     else:
         import time
         experiment_name = time.strftime("%Y_%m_%d-%H_%M_%S")
-        if opt.description != "":
-            experiment_name += opt.description
         print("Experiment name:", experiment_name)
         if opt.record_experiment:
             print("archived")
             cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(
                 experiment_name)
             subprocess.check_output(cmd, shell=True)
-        train_bideco(experiment_name=experiment_name)
+        train_pointnet(experiment_name=experiment_name)
 
 
 if __name__ == "__main__":
