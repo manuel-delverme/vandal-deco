@@ -16,12 +16,15 @@ class WASHINGTON_Dataset(data.Dataset):
         self.image_size = image_size
         self.data_dir = data_dir
         self.train = train
+        self.num_classes = sum(1 for line in open(os.path.join(self.data_dir,'../labels.txt')))
+        assert self.num_classes == 51
 
-        file_path = os.path.join(self.data_dir, '0.h5')
-        self.washington_data = h5py.File(file_path)
         mean_file_path = os.path.join(self.data_dir, '../mean.jpg')
         mean_image = np.asarray(Image.open(mean_file_path).convert('I'))
         self.mean = mean_image.mean()
+
+        file_path = os.path.join(self.data_dir, '0.h5')
+        self.washington_data = h5py.File(file_path)
         print("mean pixel value: %.6f" % self.mean)
         if self.train:
             self.train_data = self.washington_data['data']

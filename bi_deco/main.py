@@ -1,4 +1,3 @@
-from __future__ import print_function
 
 import argparse
 
@@ -6,6 +5,7 @@ import os
 
 import tf_logger
 import utils
+import bi_deco
 
 
 def parser_args():
@@ -53,7 +53,8 @@ import os
 import torch.optim
 import torch.utils.data
 import subprocess
-import models.bi_deco
+# import models.bi_deco as bi_deco_model
+import models.bi_deco_dirty as bi_deco_model
 import glob
 from torch.autograd import Variable
 
@@ -62,10 +63,9 @@ RESULTS_HOME = "/home/iodice/alessandro_results/"
 
 
 def train_bideco(experiment_name, resume_experiment=False):
-    print("loading classifier")
     logger = tf_logger.Logger("tf_log/{}".format(experiment_name))
 
-    classifier = models.bi_deco.Bi_Deco(
+    classifier = bi_deco_model.Bi_Deco(
         nr_points=opt.nr_points,
         ensemble_hidden_size=opt.ensemble_hidden_size,
         batch_norm2d=opt.batch_norm2d,
@@ -81,7 +81,6 @@ def train_bideco(experiment_name, resume_experiment=False):
         classifier.load_state_dict(torch.load(checkpoint_path))
 
     if opt.gpu != "-1":
-        print("loading classifier in GPU")
         classifier.cuda()
 
     train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
@@ -90,7 +89,6 @@ def train_bideco(experiment_name, resume_experiment=False):
         batch_size=opt.batch_size
     )
 
-    print("loss and optimizer")
     crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
     if experiment_epoch > 40 and opt.decimate_lr:
         learning_rate = 0.0007
@@ -127,11 +125,14 @@ def train_bideco(experiment_name, resume_experiment=False):
             class_loss.backward()
             class_optimizer.step()
             loss_ = class_loss.data[0]
+            # FOR FUCKS SAKE
+            torch.cuda.empty_cache()
+
             logger.scalar_summary("loss/train_loss", loss_, step + opt.nepoch * epoch)
             progress_bar.set_description("epoch {} lr {} accuracy".format(epoch, class_optimizer.param_groups[0]['lr']), last_test_accuracy)
 
-        del inputs
-        del labels
+        # del inputs
+        # del labels
         test_accuracy, test_loss = test(crossEntropyLoss, classifier, opt, test_loader)
         last_test_accuracy = test_accuracy
 
@@ -166,14 +167,14 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
     test_loss = 0.0
     total = 0.0
 
-    progress_bar = tqdm.tqdm(total=len(test_loader))
+    # progress_bar = tqdm.tqdm(total=len(test_loader))
     target_Variable = torch.LongTensor(opt.batch_size)
 
     for test_step, (inputs, labels) in enumerate(test_loader):
         if opt.skip_training and test_step > 5:
             break
         labels = target_Variable.copy_(labels)
-        progress_bar.update(1)
+        # progress_bar.update(1)
         if opt.gpu != "":
             inputs, labels = inputs.cuda(), labels.cuda()
         inputs, labels = Variable(inputs, volatile=True), Variable(labels, volatile=True)
@@ -184,14 +185,13 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
         total += labels.size(0)
         correct += predicted.eq(labels.data).cpu().sum()
         test_loss += class_loss.data[0]
-        progress_bar.set_description("accuracy {}".format(correct / total))
+        # progress_bar.set_description("accuracy {}".format(float(correct) / total))
 
-    progress_bar.close()
+    # progress_bar.close()
     return correct / total, test_loss / total
 
 
 def main():
-    print(opt)
 
     if opt.experiment_name != "":
         train_bideco(experiment_name=opt.experiment_name, resume_experiment=True)
@@ -200,9 +200,7 @@ def main():
         experiment_name = time.strftime("%Y_%m_%d-%H_%M_%S")
         if opt.description != "":
             experiment_name += opt.description
-        print("Experiment name:", experiment_name)
         if opt.record_experiment:
-            print("archived")
             cmd = "find /home/iodice/vandal-deco/bi_deco -name '*.py' | tar -cvf run{}.tar --files-from -".format(
                 experiment_name)
             subprocess.check_output(cmd, shell=True)
