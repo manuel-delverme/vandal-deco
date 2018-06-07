@@ -4,7 +4,7 @@ import random
 import torch
 import torch.nn.parallel
 import torch.utils.data
-import alex_net
+import dirty_alexnet_wrapper as alex_net
 import pointnet
 import logging
 import deco
@@ -22,23 +22,25 @@ class Bi_Deco(torch.nn.Module):
         self.ensemble_hidden_size = ensemble_hidden_size
         self.branch_dropout = branch_dropout
 
-        print("loading AlexNet")
+        print("loading AlexNet + deco")
         self.alexNet_classifier = alex_net.AlexNet(num_outputs=4069, pretrained=True, )
-        print("loading AlexNet deco")
-        self.alexNet_deco = deco.DECO(is_alex_net=True, nr_points=nr_points, batch_norm2d=batch_norm2d)
+        del self.alexNet_classifier.model.Alex.classifier
+        # print("loading AlexNet deco")
+
+        # self.alexNet_deco = deco.DECO(is_alex_net=True, nr_points=nr_points, batch_norm2d=batch_norm2d)
+        self.alexNet_deco = lambda x: x
 
         print("loading PointNet")
         self.pointNet_classifier = pointnet.PointNetClassifier(num_points=nr_points, pretrained=True,
                                                                k=WASHINGTON_CLASSES)
         print("loading PointNet DECO")
-        self.pointNet_deco = deco.DECO(
-            is_alex_net=False, nr_points=nr_points, batch_norm2d=batch_norm2d, bound_output=bound_pointnet_deco)
+        self.pointNet_deco = deco.DECO_pointNet(nr_points=nr_points, bound_output=bound_pointnet_deco)
 
         self.dropout = torch.nn.Dropout(p=dropout_probability)
 
         if ensemble_hidden_size > 0:
             self.ensemble_fc = torch.nn.Linear(
-                4096 + self.pointNet_classifier.fc2.out_features,
+                6400 + self.pointNet_classifier.fc2.out_features,
                 ensemble_hidden_size
             )
             self.ensemble_classifier = torch.nn.Linear(
@@ -47,7 +49,7 @@ class Bi_Deco(torch.nn.Module):
             )
         else:
             self.ensemble_classifier_no_hidden = torch.nn.Linear(
-                4096 + self.pointNet_classifier.fc2.out_features,
+                6400 + self.pointNet_classifier.fc2.out_features,
                 WASHINGTON_CLASSES
             )
 
