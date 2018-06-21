@@ -134,7 +134,6 @@ class DecoAlexNet(nn.Module):
         super(DecoAlexNet, self).__init__()
         self.Deco = DECO()
 
-        # self.Alex = Alex.alexnet(pretrained=True)
         self.Alex = torchvision.models.alexnet(pretrained=True)
 
         num_feats = self.Alex.classifier[6].in_features
@@ -149,7 +148,15 @@ class DecoAlexNet(nn.Module):
         return x
 
     def forward_fc7(self, x):
-        x = self.Deco(x)
-        x = self.Alex.features(x)
-        x = x.view(x.size(0), -1)
-        return x
+        # h = self.Deco(x)
+        # # y_ = self.Alex(h)
+        # h = self.Alex.features(h)
+        # h = h.view(h.size(0), 256 * 6 * 6)
+        # y_ = self.Alex.classifier(h)
+        h = self.Deco(x)
+        h = self.Alex.features(h)
+        h = h.view(h.size(0), 256 * 6 * 6)
+        for layer in list(self.Alex.classifier)[:-1]:
+            h = layer(h)
+        # y = h.view(h.size(0), -1)
+        return h

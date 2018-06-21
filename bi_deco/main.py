@@ -1,11 +1,7 @@
-
 import argparse
-
 import os
-
 import tf_logger
-import utils
-import bi_deco
+import torchsummary
 
 
 def parser_args():
@@ -19,6 +15,7 @@ def parser_args():
     parser.add_argument('--crop_size', type=int, default=224, help='fml')
     parser.add_argument('--gpu', type=str, default="-1", help='gpu bus id')
     parser.add_argument('--experiment_name', type=str, default="")
+    parser.add_argument('--from_scratch', action='store_true')
     parser.add_argument('--batch_norm2d', action='store_true')
     parser.add_argument('--branch_dropout', action='store_true')
     parser.add_argument('--skip_training', action='store_true')
@@ -40,22 +37,18 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 opt = parser_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
 
+from bi_deco import utils
 import torch
 import tqdm
 import torch.nn
 import torch.nn.parallel
 import torch.utils.data
-import bi_deco.models
-import bi_deco.datasets.washington
 import torch.nn.parallel
-import torch.utils.data
 import os
 import torch.optim
-import torch.utils.data
 import subprocess
 # import models.bi_deco as bi_deco_model
 import models.bi_deco_dirty as bi_deco_model
-import glob
 from torch.autograd import Variable
 
 RESOURCES_HOME = "/home/alessandrodm/tesi/"
@@ -65,60 +58,42 @@ RESULTS_HOME = "/home/iodice/alessandro_results/"
 def train_bideco(experiment_name, resume_experiment=False):
     logger = tf_logger.Logger("tf_log/{}".format(experiment_name))
 
-    classifier = bi_deco_model.Bi_Deco(
-        nr_points=opt.nr_points,
-        ensemble_hidden_size=opt.ensemble_hidden_size,
-        batch_norm2d=opt.batch_norm2d,
-        bound_pointnet_deco=opt.bound_pointnet_deco,
-        record_pcls=opt.record_pcls,
-        branch_dropout=opt.branch_dropout,
-        logger=logger,
-    )
-
-    experiment_epoch = -1
-    if resume_experiment:
-        checkpoint_path, experiment_epoch = latest_checkpoint_path(experiment_name)
-        classifier.load_state_dict(torch.load(checkpoint_path))
-
-    if opt.gpu != "-1":
-        classifier.cuda()
-
-    train_loader, test_loader = bi_deco.datasets.washington.load_dataset(
-        data_dir='/scratch/dataset/',
-        split=opt.split,
-        batch_size=opt.batch_size
-    )
-
-    crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
-    if experiment_epoch > 40 and opt.decimate_lr:
-        learning_rate = 0.0007
-    else:
-        learning_rate = 0.007
+    classifier, crossEntropyLoss, experiment_epoch, learning_rate = load_classifier(experiment_name, logger, resume_experiment)
+    learning_rate /= 10
 
     if opt.use_adam:
         class_optimizer = torch.optim.Adam(utils.get_trainable_params(classifier), lr=3e-4)
     else:
-        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=learning_rate, momentum=0.9, nesterov=True)
+        class_optimizer = torch.optim.SGD(utils.get_trainable_params(classifier), lr=learning_rate, momentum=0.9,
+                                          nesterov=True)
+
+    test_loader, train_loader = utils.load_dataset(opt.split, opt.batch_size)
 
     last_test_accuracy = -1
+    progress_bar = tqdm.tqdm(total=len(train_loader) * opt.nepoch)
+    samples_seen = len(train_loader) * (experiment_epoch + 1)
+    progress_bar.update(samples_seen)
+    tf_step = samples_seen
+
     for epoch in range(experiment_epoch + 1, opt.nepoch):
         if opt.decimate_lr and epoch == 40:
             class_optimizer.param_groups[0]['lr'] = learning_rate / 10.
 
         classifier.train()
-        progress_bar = tqdm.tqdm(total=len(train_loader) * (50 - experiment_epoch - 1))
+        progress_bar.set_description("epoch {} lr {} accuracy {}".format(0, class_optimizer.param_groups[0]['lr'], last_test_accuracy))
 
         for step, (inputs, labels) in enumerate(train_loader, 0):
             if opt.skip_training and step > 5:
                 break
             progress_bar.update(1)
+            tf_step += 1
 
             target_Variable = torch.LongTensor(opt.batch_size)
             labels = target_Variable.copy_(labels)
 
             inputs, labels = Variable(inputs), Variable(labels)
-            if opt.gpu != "-1":
-                inputs, labels = inputs.cuda(), labels.cuda()
+            inputs, labels = inputs.cuda(), labels.cuda()
+
             class_pred = classifier(inputs)
             class_loss = crossEntropyLoss(class_pred, labels)
             class_optimizer.zero_grad()
@@ -128,16 +103,15 @@ def train_bideco(experiment_name, resume_experiment=False):
             # FOR FUCKS SAKE
             torch.cuda.empty_cache()
 
-            logger.scalar_summary("loss/train_loss", loss_, step + opt.nepoch * epoch)
-            progress_bar.set_description("epoch {} lr {} accuracy".format(epoch, class_optimizer.param_groups[0]['lr']), last_test_accuracy)
+            logger.scalar_summary("bi_deco/train_loss", loss_, tf_step)
+            progress_bar.set_description("epoch {} lr {} accuracy {}".format(epoch, class_optimizer.param_groups[0]['lr'],
+                                         last_test_accuracy))
 
-        # del inputs
-        # del labels
+        del inputs
+        del labels
         test_accuracy, test_loss = test(crossEntropyLoss, classifier, opt, test_loader)
         last_test_accuracy = test_accuracy
-
-        logger.scalar_summary("loss/test_loss", test_loss, step + opt.nepoch * epoch)
-        logger.scalar_summary("loss/test_accuracy", test_accuracy, step + opt.nepoch * epoch)
+        logger.scalar_summary("bi_deco/test_accuracy", test_accuracy, tf_step)
 
         if not opt.skip_training:
             try:
@@ -147,18 +121,30 @@ def train_bideco(experiment_name, resume_experiment=False):
             torch.save(classifier.state_dict(), 'state_dicts/{}cls_model_{:d}.pth'.format(experiment_name, epoch))
 
 
-def latest_checkpoint_path(experiment_name):
-    experiment_epoch = -1
-    for checkpoint_path in glob.glob("/home/iodice/vandal-deco/state_dicts/{}cls_model_*.pth".format(experiment_name)):
-        f, t = checkpoint_path.rfind("_") + 1, -4
-        assert (f > 0)
-        checkpoint_epoch = checkpoint_path[f:t]
-        experiment_epoch = max(int(checkpoint_epoch), experiment_epoch)
-    if experiment_epoch == -1:
-        raise Exception("checkpoint {} not found".format(experiment_name))
-    checkpoint_path = "/home/iodice/vandal-deco/state_dicts/{}cls_model_{}.pth".format(experiment_name,
-                                                                                       experiment_epoch)
-    return checkpoint_path, experiment_epoch
+def load_classifier(experiment_name, logger, resume_experiment):
+    classifier = bi_deco_model.Bi_Deco(
+        nr_points=opt.nr_points,
+        ensemble_hidden_size=opt.ensemble_hidden_size,
+        batch_norm2d=opt.batch_norm2d,
+        bound_pointnet_deco=opt.bound_pointnet_deco,
+        record_pcls=opt.record_pcls,
+        branch_dropout=opt.branch_dropout,
+        logger=logger,
+        from_scratch=opt.from_scratch,
+    )
+    if resume_experiment:
+        checkpoint_path, experiment_epoch = utils.latest_checkpoint_path(experiment_name)
+        classifier.load_state_dict(torch.load(checkpoint_path))
+    else:
+        experiment_epoch = -1
+    assert opt.gpu != "-1"
+    classifier.cuda()
+    crossEntropyLoss = torch.nn.CrossEntropyLoss().cuda()
+    if experiment_epoch > 40 and opt.decimate_lr:
+        learning_rate = 0.0007
+    else:
+        learning_rate = 0.007
+    return classifier, crossEntropyLoss, experiment_epoch, learning_rate
 
 
 def test(CrossEntropyLoss, classifier, opt, test_loader):
@@ -167,16 +153,15 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
     test_loss = 0.0
     total = 0.0
 
-    # progress_bar = tqdm.tqdm(total=len(test_loader))
+    assert test_loader.batch_size == opt.batch_size
     target_Variable = torch.LongTensor(opt.batch_size)
 
     for test_step, (inputs, labels) in enumerate(test_loader):
         if opt.skip_training and test_step > 5:
             break
         labels = target_Variable.copy_(labels)
-        # progress_bar.update(1)
-        if opt.gpu != "":
-            inputs, labels = inputs.cuda(), labels.cuda()
+
+        inputs, labels = inputs.cuda(), labels.cuda()
         inputs, labels = Variable(inputs, volatile=True), Variable(labels, volatile=True)
 
         class_pred = classifier(inputs)
@@ -192,7 +177,6 @@ def test(CrossEntropyLoss, classifier, opt, test_loader):
 
 
 def main():
-
     if opt.experiment_name != "":
         train_bideco(experiment_name=opt.experiment_name, resume_experiment=True)
     else:

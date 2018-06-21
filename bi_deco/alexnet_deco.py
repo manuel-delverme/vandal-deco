@@ -2,7 +2,7 @@ from __future__ import print_function
 import argparse
 import os
 import tf_logger
-import utils
+from bi_deco import utils
 
 
 def parser_args():

@@ -106,14 +106,14 @@ class PointNetClassifier(nn.Module):
 
     def forward(self, x):
         x0, trans = self.feat(x)
-        x1 = F.relu(self.bn1(self.fc1(x0)))
-        x2 = F.relu(self.bn2(self.fc2(x1)))
+        x1 = F.leaky_relu(self.bn1(self.fc1(x0)))
+        x2 = F.leaky_relu(self.bn2(self.fc2(x1)))
         x3 = self.fc3(x2)
         return x3
 
     def forward_fc2(self, x):
         x0, trans = self.feat(x)
-        x1 = F.relu(self.bn1(self.fc1(x0)))
-        x2 = F.relu(self.bn2(self.fc2(x1)))
+        x1 = F.leaky_relu(self.bn1(self.fc1(x0)))
+        x2 = F.leaky_relu(self.bn2(self.fc2(x1)))
         return x2
 

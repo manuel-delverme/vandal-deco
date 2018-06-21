@@ -3,21 +3,13 @@ import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
-import math
 import tf_logger
 import itertools
-import torch.utils.data as data
 import torch.nn.parallel
-import scipy.ndimage as nd
-import torchvision as vision
 from torch.autograd import Variable
+import bi_deco.utils
 
-import h5py
-
-from classDecoAlex_onlyDepth import *
-from PIL import Image
-import os.path
-from tqdm import tqdm
+import bi_deco.models.classDecoAlex_onlyDepth
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -45,64 +37,6 @@ freezed = 'freezed'
 split = "split5"
 
 
-class Dataset_depth(data.Dataset):
-    def __init__(self, data_dir, image_size=256, train=True):
-        self.image_size = image_size  # si crea le proprieta dell oggetto
-        self.data_dir = data_dir
-        self.train = train
-
-        file_path = os.path.join(self.data_dir, '0.h5')
-        self.washington_data = h5py.File(file_path)
-        if self.train:
-            self.train_data = self.washington_data['data']
-            self.train_labels = self.washington_data['label']
-        else:
-            self.test_data = self.washington_data['data']
-            self.test_labels = self.washington_data['label']
-
-        # self.data = ReadLmdb2(data_dir)
-        self.num_classes = sum(1 for line in open(os.path.join(self.data_dir, '../labels.txt')))
-        self.length = len(self.washington_data['data'])
-        mean_file_path = os.path.join(self.data_dir, '../mean.jpg')
-        mean_image = nd.imread(mean_file_path) / 255.0
-        self.mean = mean_image.mean()  # salva come proprieta dell oggetto washington la me$
-        print("mean pixel value image: %.6f" % self.mean)
-
-        self.rc = vision.transforms.RandomCrop(
-            [228, 228])  # crea delle varibili per ogni metodo per richiamarle piu facilmente
-        self.cc = vision.transforms.CenterCrop(
-            [228, 228])  # randomcop taglia l immagine casualmente nelle dimensioni che gli ho passato
-        self.resize = vision.transforms.Scale([228, 228])
-        self.toTensor = vision.transforms.ToTensor()
-        self.toPIL = vision.transforms.ToPILImage()
-        self.flip = vision.transforms.RandomHorizontalFlip()
-
-    def __getitem__(self,
-                    index):  # restituisce l immagine in posizione index che gli passo come parametro e lo passa modificato
-        if self.train:
-            data, label = self.train_data[index], self.train_labels[index]
-            data = Image.fromarray(data[0], mode='I')
-            data = self.rc(data)  # cc is center crop, rc is randomcrop
-            data = self.flip(data)
-        else:
-            data, label = self.test_data[index], self.test_labels[index]
-            data = Image.fromarray(data[0], mode='I')
-            data = self.cc(data)  # center crop perche nel tet voglio il centro dell immagine
-
-        # rnd_shift = random.randint(-20,20)
-        # data = ImageChops.offset(data,rnd_shift)
-        data = self.toTensor(data)
-        data = data.float()
-        data -= self.mean
-        return data, label
-
-    def __len__(self):
-        if self.train:
-            return self.train_data.shape[0]
-        else:
-            return self.test_data.shape[0]
-
-
 correct_train_0 = 0
 total_train_0 = 0
 correct_0 = 0
@@ -110,20 +44,18 @@ total_0 = 0
 
 Batch_size = 32
 
-dataset = Dataset_depth(data_dir='/scratch/dataset/split5/train_db/', train=True)
-
+dataset = bi_deco.utils.Dataset_depth(data_dir='/scratch/dataset/split5/train_db/', train=True)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=Batch_size, shuffle=True, num_workers=1)
-
-test_dataset = Dataset_depth(data_dir='/scratch/dataset/split5/val_db/', train=False)
+test_dataset = bi_deco.utils.Dataset_depth(data_dir='/scratch/dataset/split5/val_db/', train=False)
 testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=Batch_size, shuffle=False, num_workers=1)
 
 num_classes = test_dataset.num_classes
 print('classes', num_classes)
 
-model_0 = DecoAlexNet(num_classes=num_classes).cuda()
+model_0 = bi_deco.models.classDecoAlex_onlyDepth.DecoAlexNet(num_classes=num_classes).cuda()
 
-s = nn.Softmax()
-criterion = nn.CrossEntropyLoss()
+s = bi_deco.models.classDecoAlex_onlyDepth.nn.Softmax()
+criterion = bi_deco.models.classDecoAlex_onlyDepth.nn.CrossEntropyLoss()
 lr = opt.lr
 
 for layer in model_0.Deco.named_children():
